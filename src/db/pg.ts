@@ -9,8 +9,13 @@ export const retryable = (e: unknown) => RETRYABLE.has((e as { code?: string })?
 
 export class PgDb implements Queryable, TxRunner {
   readonly pool: pg.Pool;
-  constructor(connectionString: string, max = 20) {
+  constructor(connectionString: string, max = 20, role?: string) {
     this.pool = new pg.Pool({ connectionString, max });
+    // Role names are internal constants, never user input.
+    if (role) {
+      if (!/^[a-z_]+$/.test(role)) throw new Error("invalid role");
+      this.pool.on("connect", (c) => { c.query(`SET ROLE ${role}`).catch(() => {}); });
+    }
     // An idle-client error (e.g. server restart) must not crash the process.
     this.pool.on("error", () => {});
   }
