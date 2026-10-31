@@ -20,14 +20,15 @@ Scope: this service only. Not a penetration test; no external review has occurre
 | Dependencies | `npm audit` 0 vulnerabilities at time of writing (CI enforces high+) |
 
 ## Known gaps / risks (honest list)
-1. **Service DB role**: tests run as superuser. Production must use a least-privilege role (no TRUNCATE/DDL, no UPDATE on `postings`/`journal_entries`; balance updates only via trigger). Not yet implemented as a migration.
+1. **Service DB role** — *Mitigated in Phase 5* (migrations 004/006): runtime role `xtc_app` has no write on ledger tables (writes via SECURITY DEFINER `ledger_post_entry`), no UPDATE on balances; production startup refuses superuser/BYPASSRLS or over-privileged roles. Residual: real login roles/passwords must be provisioned out-of-band (NOLOGIN roles are created by migration); tests use `SET ROLE`.
 2. **Triggers don't stop a superuser/owner** from disabling them; need separate migration role + DB audit (pgaudit) + off-box backups.
-3. `ledger_accounts.balance` is directly UPDATE-able by the app role; mitigate with column privileges/SECURITY DEFINER function. Reconciliation view would detect drift.
-4. Rate limiter is per-process; needs Redis for multi-instance. X-Forwarded-For is deliberately **not** trusted; behind a proxy, configure trusted-proxy handling.
+3. *Closed in Phase 5*: balance updates only via the SECURITY DEFINER trigger; app role has no UPDATE on balances (tested).
+4. *Phase 5*: Redis shared limiter implemented and tested (degrades to per-instance local limit on outage). Still needed: Redis auth/TLS/HA. X-Forwarded-For is deliberately **not** trusted; behind a proxy, configure trusted-proxy handling.
 5. JWT HS256 shared secret: prefer asymmetric (RS/ES) keys + JWKS + rotation (`kid`) before production; no revocation list.
 6. Webhook raw bodies (may contain PII) stored indefinitely; need retention/redaction policy.
-7. No row-level security policies yet (service is the only DB client; RLS needed if Supabase client access is exposed). **Never expose service-role keys to frontends.**
+7. *Phase 5*: RLS on ledger tables for the `xtc_authenticated` frontend role (own rows, SELECT only; tested). Other tables are simply not granted to it. **Never expose service-role keys to frontends.**
 8. Apple/Google/Stripe adapters verified against locally generated fixtures that follow the documented formats, **not** against live provider traffic. Google purchase verification (Play Developer API) is not implemented — such events park in `needs_review`.
 9. Purchase price/currency vs catalog not cross-checked; no user-existence check (no identity service in repo); no KYC/age gating; PCI scope not assessed (card data must stay with Stripe-hosted fields).
 10. No fraud scoring, velocity limits on gifting beyond rate limiting, or account-takeover protections.
 11. Legal/compliance review (money transmission/stored value, tax, app-store virtual currency rules) is outstanding.
+12. *Phase 5 additions / residual:* superuser/owner can still disable triggers (needs restricted DBA access, pgaudit, off-box backups). Payout destination re-linking has no cooling-off or step-up auth. Admin actions are audited but there is no four-eyes approval. Payout approval uses app-level admin role from the JWT; policy approval/holds/freeze use a separate `xtc_admin` DB login.

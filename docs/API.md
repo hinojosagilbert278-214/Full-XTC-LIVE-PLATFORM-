@@ -29,3 +29,24 @@ There is deliberately **no endpoint that lets a client set or adjust a balance**
 Backoff `30s·2^(n-1)` capped at 1h, max 8 attempts; every attempt is recorded in append-only `webhook_event_attempts`.
 Crashed workers: leases (120 s) expire and events are re-claimed; crediting is idempotent so reprocessing is safe.
 Purchases are keyed by the underlying store transaction (`purchase:{apple|google|stripe}:{txId}`) so RevenueCat and direct notifications dedupe.
+
+
+## Payouts (Phase 5)
+All routes require a bearer token. Financial mutations require `Idempotency-Key`. Responses use the same error format as the wallet API.
+
+| Method & path | Auth | Purpose |
+|---|---|---|
+| GET `/v1/payouts/availability` | user | balance / pending / held / debt / reserved / available |
+| PUT `/v1/payouts/profile` `{providerAccountId}` | user | link payout account (resets verification) |
+| POST `/v1/payouts/profile/sync` | user | refresh verification from the provider |
+| POST `/v1/payouts` `{coins}` | user | request payout (202 new / 200 replay; 503 `policy_not_approved`; 409 `no_payout_account`, `account_not_verified`, `below_minimum`, `insufficient_available`) |
+| GET `/v1/payouts`, GET `/v1/payouts/:id` | user | own payouts with status history |
+| POST `/v1/payouts/:id/cancel` | user | cancel before processing (funds returned) |
+| POST `/v1/admin/payouts/:id/review` `{decision}` | admin | approve / reject |
+| POST `/v1/admin/payouts/:id/resolve` `{action}` | admin | needs_review → retry / fail / mark_paid (provider proof required) |
+| POST `/v1/admin/payouts/:id/reverse` `{reason}` | admin | record provider reversal |
+| POST `/v1/admin/holds`, `/v1/admin/holds/:id/release` | admin | admin/risk/chargeback holds |
+| POST `/v1/admin/refunds/:id/clawback` | admin | complete refund booking shortfall as debt (needs `clawback_mode=debt`) |
+| POST `/v1/admin/accounts/:user/freeze` `{frozen}` | admin | freeze/unfreeze wallet spending |
+| GET `/v1/admin/payouts/reconciliation` | admin | ledger + provider reconciliation |
+| GET `/v1/admin/policy`, PUT `/v1/admin/policy/:key` `{value}` | admin | view / approve accounting policy (via xtc_admin DB role) |
