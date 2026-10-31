@@ -3,7 +3,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { readFileSync } from "node:fs";
 import * as L from "../src/ledger/ledger";
 
-const migration = readFileSync(new URL("../migrations/001_ledger.sql", import.meta.url), "utf8");
+const migration = ["001_ledger.sql", "004_ledger_functions.sql"].map((f) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8")).join("\n");
 let db: PGlite;
 beforeEach(async () => { db = new PGlite(); await db.exec(migration); });
 

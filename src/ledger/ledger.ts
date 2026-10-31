@@ -39,40 +39,39 @@ export async function ensureAccount(db: Queryable, id: string, kind: string, own
 type Tx = Queryable;
 export type TxRunner = { transaction<T>(fn: (tx: Tx) => Promise<T>): Promise<T> };
 
-/**
- * Post a balanced journal entry atomically and idempotently.
- * Returns {entryId, replayed}. A replay with the same key but different postings is rejected.
- */
-export async function postEntry(
-  db: TxRunner,
+export class AccountFrozenError extends Error {}
+
+/** Posts one entry inside an existing transaction through the restricted ledger_post_entry() function. */
+export async function postEntryIn(
+  tx: Queryable,
   p: { key: string; type: string; postings: Posting[]; metadata?: object; reverses?: number },
 ): Promise<{ entryId: number; replayed: boolean }> {
   if (p.postings.reduce((s, x) => s + x.amount, 0n) !== 0n) throw new Error("entry does not balance");
   const sig = JSON.stringify(p.postings.map((x) => [x.account, x.amount.toString()]));
   try {
-    return await db.transaction(async (tx) => {
-      const ins = await tx.query<{ id: number }>(
-        `INSERT INTO journal_entries(idempotency_key,type,reverses_entry,metadata)
-         VALUES($1,$2,$3,$4) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id`,
-        [p.key, p.type, p.reverses ?? null, JSON.stringify({ ...p.metadata, sig })],
-      );
-      if (ins.rows.length === 0) {
-        const ex = await tx.query<{ id: number; metadata: { sig: string } }>(
-          `SELECT id, metadata FROM journal_entries WHERE idempotency_key=$1`, [p.key]);
-        if (ex.rows[0].metadata.sig !== sig) throw new IdempotencyConflictError("idempotency key reused with different payload");
-        return { entryId: Number(ex.rows[0].id), replayed: true };
-      }
-      const entryId = Number(ins.rows[0].id);
-      // Deterministic account order avoids deadlocks under concurrent writers.
-      for (const x of [...p.postings].sort((a, b) => a.account.localeCompare(b.account)))
-        await tx.query(`INSERT INTO postings(entry_id,account_id,amount,role) VALUES($1,$2,$3,$4)`,
-          [entryId, x.account, x.amount, x.role ?? "primary"]);
-      return { entryId, replayed: false };
-    });
+    const r = await tx.query<{ entry_id: string; replayed: boolean }>(
+      `SELECT entry_id, replayed FROM ledger_post_entry($1,$2,$3::jsonb,$4::jsonb,$5,$6)`,
+      [p.key, p.type, JSON.stringify(p.postings.map((x) => ({ account: x.account, amount: x.amount.toString(), role: x.role ?? "primary" }))),
+        JSON.stringify(p.metadata ?? {}), p.reverses ?? null, sig]);
+    return { entryId: Number(r.rows[0].entry_id), replayed: r.rows[0].replayed };
   } catch (e) {
-    if (/no_negative_balance/.test(String((e as Error).message))) throw new InsufficientFundsError("insufficient funds");
+    const err = e as { code?: string; message?: string };
+    if (err.code === "P0409" || /idempotency_conflict/.test(err.message ?? "")) throw new IdempotencyConflictError("idempotency key reused with different payload");
+    if (err.code === "P0423" || /account_frozen/.test(err.message ?? "")) throw new AccountFrozenError("account frozen");
+    if (/no_negative_balance/.test(err.message ?? "")) throw new InsufficientFundsError("insufficient funds");
     throw e;
   }
+}
+
+/**
+ * Post a balanced journal entry atomically and idempotently.
+ * Returns {entryId, replayed}. A replay with the same key but different postings is rejected.
+ */
+export function postEntry(
+  db: TxRunner,
+  p: { key: string; type: string; postings: Posting[]; metadata?: object; reverses?: number },
+): Promise<{ entryId: number; replayed: boolean }> {
+  return db.transaction((tx) => postEntryIn(tx, p));
 }
 
 /** Credit coins after a verified store/web purchase (webhook-safe: key = provider transaction id). */
