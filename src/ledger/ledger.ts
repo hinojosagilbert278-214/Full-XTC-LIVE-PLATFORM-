@@ -5,6 +5,7 @@ export interface Posting { account: string; amount: bigint; role?: string }
 
 export class InsufficientFundsError extends Error {}
 export class InvalidSplitError extends Error {}
+export class IdempotencyConflictError extends Error {}
 
 export const PLATFORM = "platform:revenue";
 export const ISSUANCE = "platform:issuance";
@@ -58,7 +59,7 @@ export async function postEntry(
       if (ins.rows.length === 0) {
         const ex = await tx.query<{ id: number; metadata: { sig: string } }>(
           `SELECT id, metadata FROM journal_entries WHERE idempotency_key=$1`, [p.key]);
-        if (ex.rows[0].metadata.sig !== sig) throw new Error("idempotency key reused with different payload");
+        if (ex.rows[0].metadata.sig !== sig) throw new IdempotencyConflictError("idempotency key reused with different payload");
         return { entryId: Number(ex.rows[0].id), replayed: true };
       }
       const entryId = Number(ins.rows[0].id);
