@@ -46,3 +46,11 @@ CREATE POLICY all_rows ON postings FOR ALL TO xtc_app, xtc_admin, xtc_readonly U
 DROP POLICY IF EXISTS all_rows ON journal_entries;
 CREATE POLICY all_rows ON journal_entries FOR ALL TO xtc_app, xtc_admin, xtc_readonly USING (true) WITH CHECK (true);
 GRANT SELECT ON ledger_accounts, postings, journal_entries TO xtc_authenticated;
+
+-- Payout / policy objects (migration 005)
+GRANT SELECT, INSERT, UPDATE ON payouts, payout_profiles TO xtc_app;
+GRANT SELECT ON payout_events, payout_holds, accounting_policy, accounting_policy_history TO xtc_app, xtc_admin, xtc_readonly;
+GRANT SELECT ON payouts, payout_profiles TO xtc_admin, xtc_readonly;
+GRANT UPDATE ON payouts TO xtc_admin;
+GRANT INSERT, UPDATE ON payout_holds TO xtc_admin;
+GRANT EXECUTE ON FUNCTION approve_policy(text,text,text) TO xtc_admin;
