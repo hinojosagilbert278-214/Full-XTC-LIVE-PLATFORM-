@@ -9,6 +9,8 @@ export const retryable = (e: unknown) => RETRYABLE.has((e as { code?: string })?
 
 export class PgDb implements Queryable, TxRunner {
   readonly pool: pg.Pool;
+  /** Cumulative counters for load/ops reporting. */
+  readonly stats = { transactions: 0, retries: 0, deadlocks: 0, serializationFailures: 0, failures: 0 };
   constructor(connectionString: string, max = 20, role?: string) {
     this.pool = new pg.Pool({ connectionString, max });
     // Role names are internal constants, never user input.
@@ -32,13 +34,18 @@ export class PgDb implements Queryable, TxRunner {
         await c.query(`BEGIN ISOLATION LEVEL ${opts.isolation ?? "READ COMMITTED"}`);
         const out = await fn({ query: (t: string, v?: unknown[]) => c.query(t, v as any[]) as any });
         await c.query("COMMIT");
+        this.stats.transactions++;
         return out;
       } catch (e) {
         await c.query("ROLLBACK").catch(() => {});
+        const code = (e as { code?: string }).code;
+        if (code === "40P01") this.stats.deadlocks++; else if (code === "40001") this.stats.serializationFailures++;
         if (retryable(e) && attempt < retries) {
+          this.stats.retries++;
           await new Promise((r) => setTimeout(r, 5 * 2 ** attempt + Math.random() * 10));
           continue;
         }
+        this.stats.failures++;
         throw e;
       } finally {
         c.release();

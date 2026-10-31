@@ -29,9 +29,11 @@ jobs:
           sudo systemctl stop redis-server 2>/dev/null || true
           scripts/redis-test.sh start
       - name: Financial gate - payout state machine, recovery, privileges (fails the build on any ledger/payout regression)
-        run: npx vitest run tests/pg/payouts.test.ts tests/pg/security.test.ts tests/pg/concurrency.test.ts
+        run: npx vitest run tests/pg/payouts.test.ts tests/pg/remediation.test.ts tests/pg/security.test.ts tests/pg/concurrency.test.ts tests/dr
       - name: Full suite (ledger invariants, API, webhooks, Redis, crash recovery)
         run: npm test
+      - name: Load / concurrency drill (short; fails on any end-state invariant violation)
+        run: npm run load -- --seconds 10 --workers 8 --out reports/load-ci.json
       - name: Dependency audit
         run: npm audit --audit-level=high
       - name: Stop Redis

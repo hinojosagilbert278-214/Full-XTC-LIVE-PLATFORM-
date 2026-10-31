@@ -49,4 +49,7 @@ All routes require a bearer token. Financial mutations require `Idempotency-Key`
 | POST `/v1/admin/refunds/:id/clawback` | admin | complete refund booking shortfall as debt (needs `clawback_mode=debt`) |
 | POST `/v1/admin/accounts/:user/freeze` `{frozen}` | admin | freeze/unfreeze wallet spending |
 | GET `/v1/admin/payouts/reconciliation` | admin | ledger + provider reconciliation |
-| GET `/v1/admin/policy`, PUT `/v1/admin/policy/:key` `{value}` | admin | view / approve accounting policy (via xtc_admin DB role) |
+| GET `/v1/admin/policy` | admin | view approved policy values |
+| POST `/v1/admin/policy/:key/proposals` `{value}` | admin | propose a policy value (201; 404 unknown key; 400 invalid value) |
+| POST `/v1/admin/policy/proposals/:id/approve` | admin | **four-eyes**: a *different* admin approves (403 `four_eyes_required` if proposer; 409 not pending) |
+| POST `/v1/admin/policy/proposals/:id/reject`, GET `/v1/admin/policy/proposals` | admin | reject (not by proposer) / list |

@@ -15,7 +15,7 @@ CI workflow updated (Redis, financial gate) but **has not been executed on GitHu
 | DB crash-restart mid-payout | `pg-test.sh crash`; reserved funds intact, invariants hold, worker completes | pass |
 | Illegal transitions / edits of financial fields | DB trigger rejects even as owner | pass |
 | Immutable history | payout_events, policy history, journal/postings append-only | pass |
-| Policy not silently approved | payouts blocked in app and DB until approved; app role cannot call `approve_policy` | pass |
+| Policy not silently approved | payouts blocked in app and DB until approved; policy changes need two distinct admins (migration 007); app role cannot call propose/approve | pass |
 | Refund-related hold | refund request auto-holds creator share; released on decision | pass |
 | Clawback / debt | refund after payout → earnings 0, debt −600 (receivable), viewer refunded; replay idempotent; offset entry on later earnings | pass |
 | Legacy refund path unchanged | plain `reverseEntry` still raises InsufficientFunds | pass |

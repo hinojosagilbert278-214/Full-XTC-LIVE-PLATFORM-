@@ -43,7 +43,7 @@ reverse `:reverse` paid→earnings · debt offset `debt_offset:{user}:{key}` ear
 - **Timeout ≠ failure:** `ProviderUnknown` never returns funds; payout stays `processing`, and after lease expiry the worker *looks up* the transfer (`transfer_group=payout-{id}`) before creating again.
 - **Provider "paid" = transfer created.** Bank settlement is not tracked here and is not guaranteed.
 - **No silent debt erasure:** shortfalls from refunds are booked to `debt:*` in the same balanced entry (`reverseWithClawback`); offsets are explicit entries.
-- **Policy gate:** requests fail (app *and* DB trigger) until `hold_days, coin_value_usd_micros, min_payout_coins, review_threshold_coins, clawback_mode` are approved via `approve_policy()` (xtc_admin only, history append-only).
+- **Policy gate:** requests fail (app *and* DB trigger) until `hold_days, coin_value_usd_micros, min_payout_coins, review_threshold_coins, clawback_mode` are approved via `propose_policy()` + `approve_policy_proposal()` (xtc_admin only; proposer ≠ approver enforced in the function and a table CHECK; history append-only with both actors and version).
 - First payout and payouts ≥ `review_threshold_coins` need admin review. Refund requests auto-hold the creator share (DB trigger).
 
 ## Known limitations

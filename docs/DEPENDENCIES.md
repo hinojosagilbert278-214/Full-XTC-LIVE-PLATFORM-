@@ -14,7 +14,7 @@
 | 10 | Product catalog (SKU→coins) loaded in `products` | Crediting | Product | Open (tests seed fixtures) |
 | 11 | Real-Postgres load testing, pgbouncer sizing, HA failover tests | Scale claims | Eng | Open |
 | 12 | Payout engine | Creator payouts | Eng | Built; verified vs simulator and local Stripe fake only. **Needs Stripe test-mode verification, Connect onboarding, `transfer.reversed`/`account.updated` webhooks** |
-| 15 | Approval of `accounting_policy` values (hold_days, coin_value_usd_micros, min_payout_coins, review_threshold_coins, clawback_mode, …) | Enabling any payout | Finance | **Open — payouts are blocked until approved** |
+| 15 | Approval of `accounting_policy` values (hold_days, coin_value_usd_micros, min_payout_coins, review_threshold_coins, clawback_mode, …) | Enabling any payout | Finance | **Open — payouts are blocked until approved by two distinct admins (four-eyes)** |
 | 16 | Provision DB login roles (members of xtc_app / xtc_admin), owner role for migrations | Production DB | Infra | Open |
 | 13 | Legal/compliance review (stored value, KYC, tax, 18+, app-store rules) | Launch | Legal | Open |
 | 14 | External security review / pen-test | Launch | Security | Open |
