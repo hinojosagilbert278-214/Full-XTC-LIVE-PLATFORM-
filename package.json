@@ -9,6 +9,8 @@
     "test:pg": "vitest run tests/pg",
     "pg:start": "scripts/pg-test.sh start",
     "pg:stop": "scripts/pg-test.sh stop",
+    "redis:start": "scripts/redis-test.sh start",
+    "migrate": "tsx src/migrate.ts",
     "start": "tsx src/main.ts"
   },
   "devDependencies": {

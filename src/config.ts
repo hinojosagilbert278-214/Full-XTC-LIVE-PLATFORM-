@@ -13,6 +13,13 @@ const schema = z.object({
   APPLE_ROOT_CA_PEM: z.string().optional(),
   GOOGLE_PUBSUB_AUDIENCE: z.string().optional(),
   GOOGLE_PUBSUB_SERVICE_ACCOUNT: z.string().optional(),
+  ADMIN_DATABASE_URL: z.string().optional(),      // login that is a member of xtc_admin (policy approval, holds, freezes)
+  MIGRATION_DATABASE_URL: z.string().optional(),  // owner credentials, used only by `npm run migrate`
+  REDIS_URL: z.string().optional(),
+  ALLOW_LOCAL_RATE_LIMIT: z.enum(["true", "false"]).default("false"),
+  PAYOUT_PROVIDER: z.enum(["simulation", "stripe"]).default("simulation"),
+  STRIPE_SECRET_KEY: z.string().optional(),
+  STRIPE_API_BASE: z.string().default("https://api.stripe.com"),
   CORS_ALLOWED_ORIGINS: z.string().default(""),
   RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(120),
 });
@@ -23,5 +30,10 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const c = schema.parse(env);
   if (c.NODE_ENV === "production" && c.WEBHOOK_SIMULATION === "true")
     throw new Error("WEBHOOK_SIMULATION must not be enabled in production");
+  if (c.NODE_ENV === "production" && c.PAYOUT_PROVIDER === "simulation")
+    throw new Error("PAYOUT_PROVIDER=simulation is not allowed in production");
+  if (c.PAYOUT_PROVIDER === "stripe" && !c.STRIPE_SECRET_KEY) throw new Error("STRIPE_SECRET_KEY is required when PAYOUT_PROVIDER=stripe");
+  if (c.NODE_ENV === "production" && !c.REDIS_URL && c.ALLOW_LOCAL_RATE_LIMIT !== "true")
+    throw new Error("REDIS_URL is required in production (per-instance rate limits are not enforceable across instances)");
   return { ...c, simulation: c.WEBHOOK_SIMULATION === "true" };
 }

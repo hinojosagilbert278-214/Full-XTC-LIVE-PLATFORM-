@@ -57,3 +57,17 @@ export async function migrate(db: PgDb, dir = new URL("../../migrations/", impor
     for (const f of files) await tx.query(readFileSync(new URL(f, dir), "utf8"));
   });
 }
+
+/** Production guard: the runtime must not hold superuser/BYPASSRLS or direct write access to the ledger. */
+export async function assertLeastPrivilege(db: { query: PgDb["query"] }) {
+  const r = await db.query<{ su: boolean; bypass: boolean; ins_postings: boolean; ins_entries: boolean; upd_balance: boolean; del_audit: boolean }>(
+    `SELECT r.rolsuper su, r.rolbypassrls bypass,
+            has_table_privilege(current_user,'postings','INSERT') ins_postings,
+            has_table_privilege(current_user,'journal_entries','INSERT') ins_entries,
+            has_column_privilege(current_user,'ledger_accounts','balance','UPDATE') upd_balance,
+            has_table_privilege(current_user,'audit_log','DELETE') del_audit
+       FROM pg_roles r WHERE r.rolname = current_user`);
+  const x = r.rows[0];
+  const bad = Object.entries(x).filter(([, v]) => v).map(([k]) => k);
+  if (bad.length) throw new Error(`database role is over-privileged: ${bad.join(", ")}`);
+}

@@ -23,10 +23,20 @@ jobs:
           export PG_BIN=$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)
           echo "PG_BIN=$PG_BIN" >> "$GITHUB_ENV"
           scripts/pg-test.sh start
-      - name: Ledger invariants, API, webhook, concurrency and crash-recovery tests
+      - name: Start Redis (shared rate limiting tests)
+        run: |
+          which redis-server >/dev/null || (sudo apt-get update && sudo apt-get install -y redis-server)
+          sudo systemctl stop redis-server 2>/dev/null || true
+          scripts/redis-test.sh start
+      - name: Financial gate - payout state machine, recovery, privileges (fails the build on any ledger/payout regression)
+        run: npx vitest run tests/pg/payouts.test.ts tests/pg/security.test.ts tests/pg/concurrency.test.ts
+      - name: Full suite (ledger invariants, API, webhooks, Redis, crash recovery)
         run: npm test
       - name: Dependency audit
         run: npm audit --audit-level=high
+      - name: Stop Redis
+        if: always()
+        run: scripts/redis-test.sh stop
       - name: Stop PostgreSQL
         if: always()
         run: scripts/pg-test.sh stop

@@ -68,3 +68,21 @@ describe("least privilege", () => {
     await expect(owner.query("DELETE FROM journal_entries")).rejects.toThrow();
   });
 });
+
+import { assertLeastPrivilege } from "../../src/db/pg";
+import { loadConfig } from "../../src/config";
+describe("production guards", () => {
+  it("startup assertion rejects superuser and accepts the runtime role", async () => {
+    await expect(assertLeastPrivilege(owner)).rejects.toThrow(/over-privileged/);
+    await expect(assertLeastPrivilege(app)).resolves.toBeUndefined();
+    await expect(assertLeastPrivilege(fe)).resolves.toBeUndefined();
+  });
+  it("production config refuses simulation payouts, missing Redis, and simulation webhooks", () => {
+    const env = { NODE_ENV: "production", DATABASE_URL: "x", JWT_SECRET: "s".repeat(40), PAYOUT_PROVIDER: "stripe", STRIPE_SECRET_KEY: "k", REDIS_URL: "redis://x" };
+    expect(() => loadConfig(env)).not.toThrow();
+    expect(() => loadConfig({ ...env, PAYOUT_PROVIDER: "simulation" })).toThrow(/simulation/);
+    expect(() => loadConfig({ ...env, REDIS_URL: undefined })).toThrow(/REDIS_URL/);
+    expect(() => loadConfig({ ...env, WEBHOOK_SIMULATION: "true" })).toThrow();
+    expect(() => loadConfig({ ...env, STRIPE_SECRET_KEY: undefined })).toThrow(/STRIPE_SECRET_KEY/);
+  });
+});

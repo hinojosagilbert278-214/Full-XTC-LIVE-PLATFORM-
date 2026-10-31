@@ -4,7 +4,7 @@ import type { PgDb } from "../db/pg";
 import type { Config } from "../config";
 import * as L from "../ledger/ledger";
 import { AuthError, verifyJwt, type Principal } from "./auth";
-import { RateLimiter } from "./ratelimit";
+import { RateLimiter, type Limiter } from "./ratelimit";
 
 export class HttpError extends Error {
   constructor(public status: number, public code: string, message?: string) { super(message ?? code); }
@@ -35,10 +35,11 @@ export interface App {
   route(method: string, path: string, auth: Route["auth"], h: Handler, o?: { maxBody?: number; mutation?: boolean }): void;
 }
 
-export function createApp(db: PgDb, config: Config, extra: Array<(app: App) => void> = []): App {
+export function createApp(db: PgDb, config: Config, extra: Array<(app: App) => void> = [], opts: { limiter?: (name: string, perMinute: number) => Limiter } = {}): App {
   const routes: Route[] = [];
-  const limiter = new RateLimiter(config.RATE_LIMIT_PER_MINUTE);
-  const mutationLimiter = new RateLimiter(Math.min(30, config.RATE_LIMIT_PER_MINUTE));
+  const mk = opts.limiter ?? ((_n: string, pm: number) => new RateLimiter(pm));
+  const limiter = mk("general", config.RATE_LIMIT_PER_MINUTE);
+  const mutationLimiter = mk("mutation", Math.min(30, config.RATE_LIMIT_PER_MINUTE));
   const origins = new Set(config.CORS_ALLOWED_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean));
 
   const app: App = {
@@ -91,7 +92,7 @@ export function createApp(db: PgDb, config: Config, extra: Array<(app: App) => v
 
       if (route.auth !== "none") {
         // Unauthenticated callers are throttled by IP before any crypto work.
-        if (!limiter.allow(`ip:${ip}`)) throw new HttpError(429, "rate_limited");
+        if (!(await limiter.allow(`ip:${ip}`))) throw new HttpError(429, "rate_limited");
         const h = req.headers.authorization ?? "";
         if (!h.startsWith("Bearer ")) throw new HttpError(401, "unauthenticated");
         try {
@@ -106,9 +107,9 @@ export function createApp(db: PgDb, config: Config, extra: Array<(app: App) => v
           await app.audit({ actor: principal.sub, action: "authz.denied", resource: url.pathname, outcome: "denied", ip });
           throw new HttpError(403, "forbidden");
         }
-        if (!limiter.allow(`sub:${principal.sub}`)) throw new HttpError(429, "rate_limited");
-        if (route.mutation && !mutationLimiter.allow(`mut:${principal.sub}`)) throw new HttpError(429, "rate_limited");
-      } else if (!limiter.allow(`ip:${ip}`, 1)) throw new HttpError(429, "rate_limited");
+        if (!(await limiter.allow(`sub:${principal.sub}`))) throw new HttpError(429, "rate_limited");
+        if (route.mutation && !(await mutationLimiter.allow(`mut:${principal.sub}`))) throw new HttpError(429, "rate_limited");
+      } else if (!(await limiter.allow(`ip:${ip}`, 1))) throw new HttpError(429, "rate_limited");
 
       const rawBody = await readBody(req, route.maxBody);
       const ctx: Ctx = {
