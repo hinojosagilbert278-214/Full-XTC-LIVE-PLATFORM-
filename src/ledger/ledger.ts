@@ -1,6 +1,6 @@
-import type { PGlite } from "@electric-sql/pglite";
-
-export type Queryable = Pick<PGlite, "query">;
+export interface Queryable {
+  query<T = any>(sql: string, params?: any[]): Promise<{ rows: T[] }>;
+}
 export interface Posting { account: string; amount: bigint; role?: string }
 
 export class InsufficientFundsError extends Error {}
@@ -35,7 +35,7 @@ export async function ensureAccount(db: Queryable, id: string, kind: string, own
   );
 }
 
-type Tx = { query: Queryable["query"] };
+type Tx = Queryable;
 export type TxRunner = { transaction<T>(fn: (tx: Tx) => Promise<T>): Promise<T> };
 
 /**
