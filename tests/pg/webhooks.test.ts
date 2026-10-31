@@ -60,7 +60,7 @@ beforeAll(async () => {
 });
 afterAll(async () => { await s.close(); });
 beforeEach(async () => {
-  await s.db.query(`TRUNCATE webhook_event_attempts, webhook_events, app_account_tokens, products, refund_requests, postings, journal_entries, ledger_accounts, audit_log RESTART IDENTITY CASCADE`);
+  await s.db.query(`BEGIN; SELECT set_config('xtc.allow_destructive','on',true); TRUNCATE webhook_event_attempts, webhook_events, app_account_tokens, products, refund_requests, postings, journal_entries, ledger_accounts, audit_log RESTART IDENTITY CASCADE; COMMIT`);
   await s.db.query(`INSERT INTO products(sku,coins) VALUES('coins_500',500)`);
   await s.db.query(`INSERT INTO app_account_tokens(token,user_id) VALUES('tok-zed','zed')`);
 });

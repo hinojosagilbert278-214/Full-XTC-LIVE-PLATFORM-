@@ -9,13 +9,16 @@ let owner: PgDb, app: PgDb, sim: SimulatedProvider;
 const POLICY: Record<string, string> = { hold_days: "0", coin_value_usd_micros: "10000", min_payout_coins: "10", review_threshold_coins: "1000", clawback_mode: "debt" };
 
 async function approvePolicy(over: Record<string, string> = {}) {
-  for (const [k, v] of Object.entries({ ...POLICY, ...over })) await owner.query("SELECT approve_policy($1,$2,'finance-admin')", [k, v]);
+  for (const [k, v] of Object.entries({ ...POLICY, ...over })) {
+    const id = (await owner.query("SELECT propose_policy($1,$2,'finance-a') id", [k, v])).rows[0].id;
+    await owner.query("SELECT approve_policy_proposal($1,'finance-b')", [id]);
+  }
 }
 beforeAll(async () => { owner = await freshDb(); app = new PgDb(TEST_URL, 20, "xtc_app"); });
 afterAll(async () => { await owner.close(); await app.close(); });
 beforeEach(async () => {
-  await owner.query(`TRUNCATE postings, journal_entries, ledger_accounts, audit_log, payouts, payout_events, payout_holds, payout_profiles, refund_requests RESTART IDENTITY CASCADE`);
-  await owner.query(`UPDATE accounting_policy SET value=NULL, approved_by=NULL, approved_at=NULL`);
+  await owner.query(`BEGIN; SELECT set_config('xtc.allow_destructive','on',true); TRUNCATE postings, journal_entries, ledger_accounts, audit_log, payouts, payout_events, payout_holds, payout_profiles, refund_requests RESTART IDENTITY CASCADE; COMMIT`);
+  await owner.query("BEGIN; SELECT set_config('xtc.policy_fn','on',true); UPDATE accounting_policy SET value=NULL, approved_by=NULL, approved_at=NULL, version=0; COMMIT");
   sim = new SimulatedProvider();
 });
 
@@ -45,7 +48,7 @@ describe("policy gate", () => {
     await approvePolicy();
     const h = await owner.query("SELECT count(*)::int n FROM accounting_policy_history");
     expect(h.rows[0].n).toBe(5);
-    await expect(app.query("SELECT approve_policy('hold_days','0','me')")).rejects.toThrow(/permission denied/);
+    await expect(app.query("SELECT approve_policy_proposal(1,'me')")).rejects.toThrow(/permission denied/);
     await expect(owner.query("UPDATE accounting_policy_history SET actor='x'")).rejects.toThrow(/append-only/);
     await expect(app.query("UPDATE accounting_policy SET value='1'")).rejects.toThrow(/permission denied/);
   });
@@ -59,9 +62,7 @@ describe("availability", () => {
     expect([a.balance, a.pending, a.available]).toEqual([700n, 700n, 0n]);
     await owner.query("UPDATE journal_entries SET created_at = now() - interval '8 days'").catch(() => {}); // blocked: append-only
     // age the earnings legitimately for the test by superuser trigger bypass
-    await owner.query("ALTER TABLE journal_entries DISABLE TRIGGER USER");
-    await owner.query("UPDATE journal_entries SET created_at = now() - interval '8 days'");
-    await owner.query("ALTER TABLE journal_entries ENABLE TRIGGER USER");
+    await owner.query("BEGIN; SELECT set_config('xtc.migrating','on',true); ALTER TABLE journal_entries DISABLE TRIGGER USER; UPDATE journal_entries SET created_at = now() - interval '8 days'; ALTER TABLE journal_entries ENABLE TRIGGER USER; COMMIT");
     a = await P.availability(app, "c1");
     expect([a.pending, a.available]).toEqual([0n, 700n]);
     await owner.query("INSERT INTO payout_holds(user_id,kind,amount,reason) VALUES('c1','admin',200,'review')");
@@ -296,7 +297,7 @@ describe("holds, debt and clawbacks", () => {
   });
   it("clawback path is blocked until clawback_mode is approved", async () => {
     const g = await earn("c1", 1000n);
-    await owner.query("UPDATE accounting_policy SET value=NULL, approved_by=NULL, approved_at=NULL WHERE key='clawback_mode'");
+    await owner.query("BEGIN; SELECT set_config('xtc.policy_fn','on',true); UPDATE accounting_policy SET value=NULL, approved_by=NULL, approved_at=NULL WHERE key='clawback_mode'; COMMIT");
     await expect(P.reverseWithClawback(app, { entryId: g.entryId, key: "c", reason: "r" })).rejects.toThrow(P.PolicyNotApprovedError);
   });
   it("frozen wallets cannot spend but can receive reversals", async () => {

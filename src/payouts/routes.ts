@@ -110,14 +110,33 @@ export function payoutRoutes(provider: PayoutProvider, adminDb?: PgDb) {
     });
     app.route("GET", "/v1/admin/payouts/reconciliation", "admin", async () => ({ body: await P.reconcilePayouts(db, provider) }));
     app.route("GET", "/v1/admin/policy", "admin", async () => ({ body: await P.getPolicy(db) }));
-    // Approval is a deliberate admin act executed by the xtc_admin role through approve_policy(); nothing auto-approves.
-    app.route("PUT", "/v1/admin/policy/:key", "admin", async (c) => {
+    // Four-eyes: one admin proposes, a different admin approves. Enforced in SQL (function and table CHECK).
+    app.route("POST", "/v1/admin/policy/:key/proposals", "admin", async (c) => {
       if (!adminDb) throw new HttpError(503, "admin_db_not_configured");
       const b = c.json(z.object({ value: z.string().min(1).max(64) }).strict());
       const key = z.string().regex(/^[a-z_]{1,64}$/).parse(c.params.key);
-      await adminDb.query(`SELECT approve_policy($1,$2,$3)`, [key, b.value, me(c)]).catch(() => { throw new HttpError(404, "unknown_policy_key"); });
-      await adminAudit(c, "policy.approve", `policy:${key}`, { value: b.value });
-      return { body: { key, value: b.value } };
+      const r = await adminDb.query<{ id: string }>(`SELECT propose_policy($1,$2,$3) AS id`, [key, b.value, me(c)])
+        .catch((e) => { throw new HttpError(/unknown policy/.test(String(e.message)) ? 404 : 400, /unknown policy/.test(String(e.message)) ? "unknown_policy_key" : "invalid_policy_value"); });
+      await adminAudit(c, "policy.propose", `policy:${key}`, { value: b.value, proposalId: r.rows[0].id });
+      return { status: 201, body: { proposalId: Number(r.rows[0].id), key, value: b.value, status: "pending" } };
     });
+    app.route("POST", "/v1/admin/policy/proposals/:id/approve", "admin", async (c) => {
+      if (!adminDb) throw new HttpError(503, "admin_db_not_configured");
+      const id = z.coerce.number().int().positive().parse(c.params.id);
+      await adminDb.query(`SELECT approve_policy_proposal($1,$2)`, [id, me(c)]).catch((e) => {
+        if (/four-eyes/.test(String(e.message))) throw new HttpError(403, "four_eyes_required");
+        throw new HttpError(409, "proposal_not_pending");
+      });
+      await adminAudit(c, "policy.approve", `proposal:${id}`);
+      return { body: { proposalId: id, status: "approved" } };
+    });
+    app.route("POST", "/v1/admin/policy/proposals/:id/reject", "admin", async (c) => {
+      if (!adminDb) throw new HttpError(503, "admin_db_not_configured");
+      const id = z.coerce.number().int().positive().parse(c.params.id);
+      await adminDb.query(`SELECT reject_policy_proposal($1,$2)`, [id, me(c)]).catch(() => { throw new HttpError(409, "proposal_not_pending"); });
+      await adminAudit(c, "policy.reject", `proposal:${id}`);
+      return { body: { proposalId: id, status: "rejected" } };
+    });
+    app.route("GET", "/v1/admin/policy/proposals", "admin", async () => ({ body: (await db.query(`SELECT id,key,value,proposed_by,proposed_at,status,decided_by,decided_at FROM policy_proposals ORDER BY id DESC LIMIT 100`)).rows }));
   };
 }

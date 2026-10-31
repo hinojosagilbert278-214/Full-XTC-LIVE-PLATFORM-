@@ -87,6 +87,8 @@ async function handle(db: PgDb, ev: Row, deps: WebhookDeps): Promise<number> {
     const orig = await db.query<{ id: string }>(`SELECT id FROM journal_entries WHERE idempotency_key=$1`, [`purchase:${lp}:${tx}`]);
     // Out of order: refund delivered before the purchase. Retry with backoff until the purchase lands.
     if (!orig.rows[0]) throw new RetryableWebhookError("purchase not yet recorded");
+    // Protect creator/family earnings first: holds are committed independently so they survive a failed reversal.
+    if (ev.kind === "chargeback") await db.query(`SELECT place_chargeback_holds($1)`, [Number(orig.rows[0].id)]);
     // InsufficientFundsError (coins already spent) is deliberately not forced negative: it parks as needs_review.
     return (await L.reverseEntry(db, { entryId: Number(orig.rows[0].id), key: `reversal:${lp}:${tx}`, reason: ev.kind })).entryId;
   }

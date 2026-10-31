@@ -49,11 +49,41 @@ export async function availability(db: L.Queryable, userId: string) {
   return { balance, pending, held: holds, debt, reserved, available, policyApproved: REQUIRED.every((k) => policy[k] != null) };
 }
 
+/** Family earnings split the same way as creator earnings: balance, active holds, debt, available. Families are not paid out yet. */
+export async function familyAvailability(db: L.Queryable, familyId: string) {
+  const acct = L.familyId(familyId);
+  const balance = await L.balanceOf(db, acct);
+  const debt = -(await L.balanceOf(db, `debt:family:${familyId}`));
+  const held = BigInt((await db.query<{ s: string }>(`SELECT COALESCE(SUM(amount),0) s FROM payout_holds WHERE account_id=$1 AND status='active'`, [acct])).rows[0].s);
+  let available = balance - held - debt; if (available < 0n) available = 0n;
+  return { balance, held, debt, available };
+}
+
+/** Explicit offset entry: family earnings repay family debt. Never silently erases it. */
+export async function offsetFamilyDebt(db: PgDb, familyId: string, key: string) {
+  return db.transaction(async (tx) => {
+    await tx.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`family:${familyId}`]);
+    const a = await familyAvailability(tx, familyId);
+    const off = a.debt < a.balance - a.held ? a.debt : a.balance - a.held;
+    if (off <= 0n) return { offset: 0n };
+    await L.postEntryIn(tx, { key: `debt_offset:family:${familyId}:${key}`, type: "debt_offset",
+      postings: [{ account: L.familyId(familyId), amount: -off, role: "debt_offset" }, { account: `debt:family:${familyId}`, amount: off, role: "debt_offset" }] });
+    return { offset: off };
+  });
+}
+
 const lockUser = (tx: L.Queryable, u: string) => tx.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`payout:${u}`]);
 
+type LinkCol = "reserve_entry" | "settle_entry" | "return_entry" | "reverse_entry";
+/** Records the ledger entry on the payout row; the deferred DB constraint verifies it at commit. */
+async function link(tx: L.Queryable, id: string | number, col: LinkCol, r: { entryId: number }) {
+  await tx.query(`UPDATE payouts SET ${col}=$2 WHERE id=$1`, [id, r.entryId]);
+}
+
 async function returnFunds(tx: L.Queryable, p: PayoutRow) {
-  await L.postEntryIn(tx, { key: `payout:${p.id}:return`, type: "payout_return", metadata: { payoutId: p.id },
+  const r = await L.postEntryIn(tx, { key: `payout:${p.id}:return`, type: "payout_return", metadata: { payoutId: p.id },
     postings: [{ account: CLEARING, amount: -BigInt(p.amount_coins), role: "payout_return" }, { account: L.earningsId(p.user_id), amount: BigInt(p.amount_coins), role: "payout_return" }] });
+  await link(tx, p.id, "return_entry", r);
 }
 
 export async function requestPayout(db: PgDb, provider: PayoutProvider, o: { userId: string; key: string; coins: bigint; actor: string }) {
@@ -96,8 +126,9 @@ export async function requestPayout(db: PgDb, provider: PayoutProvider, o: { use
       [o.userId, o.key, o.coins.toString(), minor.toString(), policy.rateMicros.toString(), status, provider.name, prof.provider_account_id, o.actor]);
     const p = ins.rows[0];
     try {
-      await L.postEntryIn(tx, { key: `payout:${p.id}:reserve`, type: "payout_reserve", metadata: { payoutId: p.id },
+      const r = await L.postEntryIn(tx, { key: `payout:${p.id}:reserve`, type: "payout_reserve", metadata: { payoutId: p.id },
         postings: [{ account: L.earningsId(o.userId), amount: -o.coins, role: "payout_reserve" }, { account: CLEARING, amount: o.coins, role: "payout_reserve" }] });
+      await link(tx, p.id, "reserve_entry", r);
     } catch (e) { if (e instanceof L.InsufficientFundsError) throw new PayoutError("insufficient_available"); throw e; }
     return { payout: p, replayed: false };
   });
@@ -112,11 +143,18 @@ async function transition(tx: L.Queryable, id: string | number, from: PayoutStat
   return r.rows[0] ?? null;
 }
 
-const settle = (tx: L.Queryable, p: PayoutRow) => L.postEntryIn(tx, { key: `payout:${p.id}:settle`, type: "payout_settle", metadata: { payoutId: p.id, providerRef: p.provider_ref },
-  postings: [{ account: CLEARING, amount: -BigInt(p.amount_coins), role: "payout_settle" }, { account: PAID, amount: BigInt(p.amount_coins), role: "payout_settle" }] });
+const settle = async (tx: L.Queryable, p: PayoutRow) => link(tx, p.id, "settle_entry", await L.postEntryIn(tx, { key: `payout:${p.id}:settle`, type: "payout_settle", metadata: { payoutId: p.id, providerRef: p.provider_ref },
+  postings: [{ account: CLEARING, amount: -BigInt(p.amount_coins), role: "payout_settle" }, { account: PAID, amount: BigInt(p.amount_coins), role: "payout_settle" }] }));
 
-export async function markPaid(db: PgDb, id: string | number, ref: string, actor: string) {
+export type EvidenceSource = "create_response" | "provider_lookup" | "provider_webhook";
+/** The database refuses 'paid' without matching evidence; needs_review -> paid additionally requires lookup/webhook evidence. */
+export async function markPaid(db: PgDb, id: string | number, ref: string, actor: string, source: EvidenceSource = "provider_lookup") {
   return db.transaction(async (tx) => {
+    const cur = await tx.query<PayoutRow>(`SELECT * FROM payouts WHERE id=$1 AND status IN ('processing','needs_review')`, [id]);
+    if (!cur.rows[0]) return null;
+    const c = cur.rows[0];
+    await tx.query(`INSERT INTO payout_provider_evidence(payout_id,provider,provider_ref,amount_minor,currency,source) VALUES($1,$2,$3,$4,$5,$6)
+                    ON CONFLICT (payout_id) DO NOTHING`, [id, c.provider, ref, c.amount_minor, c.currency, source]);
     const p = await transition(tx, id, ["processing", "needs_review"], "paid", actor, { provider_ref: ref, lease_until: null });
     if (!p) return null; // already settled by another worker: idempotent no-op
     await settle(tx, p);
@@ -161,8 +199,9 @@ export async function reversePayout(db: PgDb, id: string | number, reason: strin
   return db.transaction(async (tx) => {
     const p = await transition(tx, id, ["paid"], "reversed", actor, { failure_reason: reason });
     if (!p) throw new PayoutError("not_reversible");
-    await L.postEntryIn(tx, { key: `payout:${p.id}:reverse`, type: "payout_reverse", metadata: { payoutId: p.id, reason },
+    const rv = await L.postEntryIn(tx, { key: `payout:${p.id}:reverse`, type: "payout_reverse", metadata: { payoutId: p.id, reason },
       postings: [{ account: PAID, amount: -BigInt(p.amount_coins), role: "payout_reverse" }, { account: L.earningsId(p.user_id), amount: BigInt(p.amount_coins), role: "payout_reverse" }] });
+    await link(tx, p.id, "reverse_entry", rv);
     return p;
   });
 }
@@ -178,7 +217,7 @@ export async function resolvePayout(db: PgDb, provider: PayoutProvider, id: stri
   }
   const found = await provider.findTransfer(Number(id)).catch(() => { throw new PayoutError("provider_unavailable"); });
   if (!found) throw new PayoutError("provider_transfer_missing");
-  const p = await markPaid(db, id, found.ref, actor); if (!p) throw new PayoutError("not_in_review"); return p;
+  const p = await markPaid(db, id, found.ref, actor, "provider_lookup"); if (!p) throw new PayoutError("not_in_review"); return p;
 }
 
 const backoff = (attempt: number) => Math.min(30 * 2 ** (attempt - 1), 3600);
@@ -203,18 +242,17 @@ export async function processDuePayouts(db: PgDb, provider: PayoutProvider, limi
   for (const p of claimed) {
     const toReview = (reason: string) => db.transaction((tx) => transition(tx, p.id, ["processing"], "needs_review", "worker", { failure_reason: reason, lease_until: null }));
     try {
-      // Any attempt after the first may follow an uncertain outcome: look before creating.
-      if (p.attempts > 1 || p.was_processing) {
-        const f = await provider.findTransfer(Number(p.id));
-        if (f) {
-          if (f.reversed) { await toReview("provider_transfer_reversed"); out.review++; } else { await markPaid(db, p.id, f.ref, "worker"); out.paid++; }
-          continue;
-        }
+      // Always look before creating: provider idempotency keys expire, and a database restored from an older backup
+      // may not know about transfers the provider already made.
+      const f = await provider.findTransfer(Number(p.id));
+      if (f) {
+        if (f.reversed) { await toReview("provider_transfer_reversed"); out.review++; } else { await markPaid(db, p.id, f.ref, "worker", "provider_lookup"); out.paid++; }
+        continue;
       }
       const acct = await provider.getAccount(p.provider_account_id);
       if (!acct.exists || !acct.verified || !acct.payoutsEnabled) { await toReview("account_not_eligible"); out.review++; continue; }
       const t = await provider.createTransfer({ payoutId: Number(p.id), accountId: p.provider_account_id, amountMinor: BigInt(p.amount_minor), currency: p.currency, idempotencyKey: `payout-${p.id}` });
-      await markPaid(db, p.id, t.ref, "worker"); out.paid++;
+      await markPaid(db, p.id, t.ref, "worker", "create_response"); out.paid++;
     } catch (e) {
       if (e instanceof ProviderRejected) { await markFailed(db, p.id, `provider_rejected: ${e.message}`, "worker", ["processing"]); out.failed++; }
       else if (p.attempts >= maxAttempts) { await toReview(`attempts_exhausted: ${(e as Error).message}`); out.review++; }

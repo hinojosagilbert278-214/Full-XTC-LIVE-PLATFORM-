@@ -14,13 +14,13 @@ beforeAll(async () => {
   await L.sendGift(ctx.db, { giftId: "g1", fromUser: "fan", creatorId: "c1", coins: 1000n });
 });
 afterAll(async () => { await ctx.close(); await admin.close(); });
-const U = () => token("c1"), A = () => token("boss", "admin");
+const U = () => token("c1"), A = () => token("boss", "admin"), A2 = () => token("boss2", "admin");
 
 describe("payout API", () => {
   it("requires authentication; admin routes require admin", async () => {
     expect((await call(ctx.url, "GET", "/v1/payouts")).status).toBe(401);
     expect((await call(ctx.url, "POST", "/v1/admin/payouts/1/review", { tok: U(), body: { decision: "approve" } })).status).toBe(403);
-    expect((await call(ctx.url, "PUT", "/v1/admin/policy/hold_days", { tok: U(), body: { value: "0" }, key: "p" })).status).toBe(403);
+    expect((await call(ctx.url, "POST", "/v1/admin/policy/hold_days/proposals", { tok: U(), body: { value: "0" } })).status).toBe(403);
     expect((await call(ctx.url, "POST", "/v1/admin/holds", { tok: U(), body: { userId: "c1", kind: "admin", amount: 5, reason: "xxx" } })).status).toBe(403);
     expect((await call(ctx.url, "POST", "/v1/admin/accounts/c1/freeze", { tok: U(), body: { frozen: true } })).status).toBe(403);
   });
@@ -28,9 +28,18 @@ describe("payout API", () => {
     await call(ctx.url, "PUT", "/v1/payouts/profile", { tok: U(), body: { providerAccountId: "acct_c1xyz" } });
     await ctx.db.query("UPDATE payout_profiles SET verification_status='verified', payouts_enabled=true"); // provider sync is covered elsewhere
     expect((await call(ctx.url, "POST", "/v1/payouts", { tok: U(), body: { coins: 100 }, key: "a" })).status).toBe(503);
-    for (const [k, v] of Object.entries({ hold_days: "0", coin_value_usd_micros: "10000", min_payout_coins: "10", review_threshold_coins: "1000", clawback_mode: "debt" }))
-      expect((await call(ctx.url, "PUT", `/v1/admin/policy/${k}`, { tok: A(), body: { value: v } })).status).toBe(200);
-    expect((await call(ctx.url, "PUT", "/v1/admin/policy/nope", { tok: A(), body: { value: "1" } })).status).toBe(404);
+    for (const [k, v] of Object.entries({ hold_days: "0", coin_value_usd_micros: "10000", min_payout_coins: "10", review_threshold_coins: "1000", clawback_mode: "debt" })) {
+      const pr = await call(ctx.url, "POST", `/v1/admin/policy/${k}/proposals`, { tok: A(), body: { value: v } });
+      expect(pr.status).toBe(201);
+      const id = pr.body.proposalId;
+      expect((await call(ctx.url, "POST", `/v1/admin/policy/proposals/${id}/approve`, { tok: A() })).status).toBe(403); // proposer cannot approve
+      expect((await call(ctx.url, "POST", `/v1/admin/policy/proposals/${id}/approve`, { tok: A2() })).status).toBe(200);
+      expect((await call(ctx.url, "POST", `/v1/admin/policy/proposals/${id}/approve`, { tok: A2() })).status).toBe(409);
+    }
+    expect((await call(ctx.url, "POST", "/v1/admin/policy/nope/proposals", { tok: A(), body: { value: "1" } })).status).toBe(404);
+    expect((await call(ctx.url, "POST", "/v1/admin/policy/hold_days/proposals", { tok: A(), body: { value: "abc" } })).status).toBe(400);
+    const h = (await ctx.db.query("SELECT proposed_by, actor, version FROM accounting_policy_history WHERE key='hold_days'")).rows[0];
+    expect(h).toMatchObject({ proposed_by: "boss", actor: "boss2", version: 1 });
     const pol = (await call(ctx.url, "GET", "/v1/admin/policy", { tok: A() })).body;
     expect(pol.hold_days).toBe("0");
   });
