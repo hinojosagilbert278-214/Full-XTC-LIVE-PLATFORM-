@@ -72,7 +72,7 @@ const inv = async () => { const i = await L.checkInvariants(s.db); expect(i.glob
 describe("Stripe signature verification", () => {
   it("rejects bad signature, wrong secret, stale timestamp, tampered body and missing header", async () => {
     const raw = stripePurchase("evt_1", "pi_1");
-    const cases = [{}, { "stripe-signature": "t=1,v1=00" }, { "stripe-signature": stripeSig(raw, undefined, "wrong") }, { "stripe-signature": stripeSig(raw, Math.floor(Date.now() / 1000) - 3600) }, { "stripe-signature": stripeSig(raw + " ") }];
+    const cases: Record<string, string>[] = [{}, { "stripe-signature": "t=1,v1=00" }, { "stripe-signature": stripeSig(raw, undefined, "wrong") }, { "stripe-signature": stripeSig(raw, Math.floor(Date.now() / 1000) - 3600) }, { "stripe-signature": stripeSig(raw + " ") }];
     for (const h of cases) expect((await post("/webhooks/stripe", raw, h)).status).toBe(401);
     expect((await s.db.query(`SELECT 1 FROM webhook_events`)).rows).toHaveLength(0);
     expect((await s.db.query(`SELECT 1 FROM audit_log WHERE action='webhook.rejected'`)).rows.length).toBeGreaterThanOrEqual(5);

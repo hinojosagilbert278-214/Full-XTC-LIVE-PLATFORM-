@@ -26,29 +26,27 @@ and must be imported or reviewed before this code is treated as canonical (to pr
 
 ## 3. Honest limitations
 
-- Tests run on PGlite (Postgres in WASM, **single connection**). The "double spend" test proves the
-  CHECK constraint and serialization semantics, **not** true multi-connection row-lock contention.
-  A multi-connection test against real PostgreSQL is required before production.
+- (Resolved in Phase 4) PGlite tests are single-connection; real multi-connection locking is now tested on PostgreSQL 16 (docs/CONCURRENCY_REPORT.md).
 - Rounding rule: platform absorbs the remainder (`coins − floor(0.7·coins)`); family = floor of its bps of the creator share. This is an
   assumption; confirm against the established economic rules.
 - Reversal fails (rather than going negative) if creator funds were already paid out; this needs an
   approved negative-balance/clawback accounting rule and a manual-review queue.
-- No HTTP API, auth, RLS, webhooks signature verification, or provider adapters yet.
+- Phase 4 added HTTP API, JWT auth, webhook verification; RLS and real provider payout adapters remain (docs/SECURITY.md).
 
 ## 4. Acceptance table
 
 | Area | Status | Evidence | Remaining work |
 |---|---|---|---|
 | Architecture | Draft | `docs/ARCHITECTURE.md` | Diagrams, capacity/cost models need real load data |
-| Backend | Not started (ledger core only) | `src/ledger` | API, auth, RLS, rate limiting |
+| Backend | Wallet service only | `src/api`, `src/webhooks`, docs/API.md | Other domains; RLS; Redis rate limits |
 | Frontend | Not started | – | Web + iOS/Android clients, design system |
-| Wallet | Core implemented | 14 passing tests | Multi-connection tests on Postgres, provider webhooks, reconciliation jobs |
+| Wallet | Core + API + webhooks; **not production-ready** | 65 passing tests incl. real PostgreSQL 16 concurrency/crash tests (docs/CONCURRENCY_REPORT.md) | Accounting-rule sign-off, least-privilege DB role, live-provider verification, load tests, pen-test (docs/DEPENDENCIES.md) |
 | Payouts | Not started | – | Stripe Connect Express adapter, payout state machine, idempotent execution (needs Stripe credentials) |
 | Broadcasting | Not started | – | SFU/WHIP/LL-HLS (needs infra vendor decision) |
 | Gaming | Not started | – | Signed sessions, server-authoritative scoring |
 | Families | Not started | split rule only | Membership, cooldown, invite, transfer rules (need existing rule specs) |
 | World Dominion | Not started | – | Territory model, tile-aggregation pipeline |
 | AI | Not started | – | Orchestrator, RAG, tool-permission layer |
-| Security | Minimal | DB-level integrity only | Threat model, authn/z, scanning, compliance review (legal) |
+| Security | Wallet-service controls tested | docs/SECURITY.md | Threat model, authn/z, scanning, compliance review (legal) |
 | CI/CD | Baseline | `.github/workflows/ci.yml` | Security scans, SBOM, signing, load tests, deploy verification |
 | Production deployment | Not started | – | Infra, credentials, runbooks, DR tests |

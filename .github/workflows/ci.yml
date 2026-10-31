@@ -13,7 +13,20 @@ jobs:
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npm run typecheck
-      - name: Ledger invariants and unit tests
+      - name: Ensure PostgreSQL 16+ binaries
+        run: |
+          if ! ls /usr/lib/postgresql/1[6-9]/bin/initdb >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y postgresql-16
+          fi
+      - name: Start real PostgreSQL (non-root cluster)
+        run: |
+          export PG_BIN=$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)
+          echo "PG_BIN=$PG_BIN" >> "$GITHUB_ENV"
+          scripts/pg-test.sh start
+      - name: Ledger invariants, API, webhook, concurrency and crash-recovery tests
         run: npm test
       - name: Dependency audit
         run: npm audit --audit-level=high
+      - name: Stop PostgreSQL
+        if: always()
+        run: scripts/pg-test.sh stop
