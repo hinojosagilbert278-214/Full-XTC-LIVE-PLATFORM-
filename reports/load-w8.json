@@ -1,0 +1,93 @@
+{
+  "config": {
+    "seconds": 30,
+    "workers": 8,
+    "creators": 20,
+    "node": "v26.12.1",
+    "note": "synthetic mix on one local machine; NOT a capacity claim"
+  },
+  "throughput": {
+    "elapsedSeconds": 30.8,
+    "successfulOps": 4570,
+    "opsPerSecond": 148.5,
+    "perOp": {
+      "gift": 2298,
+      "process": 1159,
+      "chargeback_holds": 581,
+      "payout_request": 530,
+      "refund_clawback": 2
+    }
+  },
+  "latencyMs": {
+    "gift": {
+      "n": 2298,
+      "p50": 1.68,
+      "p95": 11.88,
+      "p99": 17.52,
+      "max": 36.38
+    },
+    "process": {
+      "n": 1159,
+      "p50": 0.61,
+      "p95": 9.74,
+      "p99": 20.29,
+      "max": 51.3
+    },
+    "chargeback_holds": {
+      "n": 581,
+      "p50": 369.69,
+      "p95": 750.09,
+      "p99": 788.65,
+      "max": 793.81
+    },
+    "payout_request": {
+      "n": 530,
+      "p50": 4.74,
+      "p95": 19.93,
+      "p99": 28.57,
+      "max": 49.85
+    },
+    "refund_clawback": {
+      "n": 2,
+      "p50": 42.27,
+      "p95": 42.27,
+      "p99": 42.27,
+      "max": 42.27
+    }
+  },
+  "contention": {
+    "pgDeadlocksDuringRun": 0,
+    "appDeadlockRetries": 0,
+    "serializationRetries": 0,
+    "totalTxRetries": 0,
+    "retryRatePerTx": 0,
+    "lockWaitSamples": 1933,
+    "maxConcurrentLockWaiters": 7,
+    "transactionsRolledBack_includingBusinessRejections": 625
+  },
+  "expectedRejections": {
+    "payout_request:insufficient_available": 625
+  },
+  "providerSimulation": {
+    "createCalls": 550,
+    "transfers": 550
+  },
+  "endState": {
+    "payoutsByStatus": {
+      "paid": 550
+    },
+    "paid": 550,
+    "globalLedgerSum": "0",
+    "unbalancedEntries": 0,
+    "ledgerDiscrepancies": 0,
+    "unexpectedNegativeBalances": 0,
+    "duplicatePayoutIdempotencyKeys": 0,
+    "payoutsWithMultipleEvidence": 0,
+    "transfersEqualPaidPayouts": true,
+    "callsEqualTransfers": true,
+    "reconciliationOk": true,
+    "reconciliationMismatches": 0,
+    "reconciliationMs": 10
+  },
+  "invariantsPassed": true
+}

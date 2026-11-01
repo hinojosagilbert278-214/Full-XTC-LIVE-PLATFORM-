@@ -1,0 +1,93 @@
+{
+  "config": {
+    "seconds": 30,
+    "workers": 16,
+    "creators": 20,
+    "node": "v26.12.1",
+    "note": "synthetic mix on one local machine; NOT a capacity claim"
+  },
+  "throughput": {
+    "elapsedSeconds": 31.6,
+    "successfulOps": 4551,
+    "opsPerSecond": 144,
+    "perOp": {
+      "process": 1167,
+      "gift": 2296,
+      "chargeback_holds": 586,
+      "refund_clawback": 2,
+      "payout_request": 500
+    }
+  },
+  "latencyMs": {
+    "process": {
+      "n": 1167,
+      "p50": 0.58,
+      "p95": 15.55,
+      "p99": 29.63,
+      "max": 63.66
+    },
+    "gift": {
+      "n": 2296,
+      "p50": 1.73,
+      "p95": 25.23,
+      "p99": 43.1,
+      "max": 85.41
+    },
+    "chargeback_holds": {
+      "n": 586,
+      "p50": 808.23,
+      "p95": 1565.39,
+      "p99": 1677.35,
+      "max": 1685.6
+    },
+    "refund_clawback": {
+      "n": 2,
+      "p50": 58.59,
+      "p95": 58.59,
+      "p99": 58.59,
+      "max": 58.59
+    },
+    "payout_request": {
+      "n": 500,
+      "p50": 4.88,
+      "p95": 32.74,
+      "p99": 51.03,
+      "max": 63.87
+    }
+  },
+  "contention": {
+    "pgDeadlocksDuringRun": 0,
+    "appDeadlockRetries": 0,
+    "serializationRetries": 0,
+    "totalTxRetries": 0,
+    "retryRatePerTx": 0,
+    "lockWaitSamples": 4346,
+    "maxConcurrentLockWaiters": 15,
+    "transactionsRolledBack_includingBusinessRejections": 660
+  },
+  "expectedRejections": {
+    "payout_request:insufficient_available": 660
+  },
+  "providerSimulation": {
+    "createCalls": 520,
+    "transfers": 520
+  },
+  "endState": {
+    "payoutsByStatus": {
+      "paid": 520
+    },
+    "paid": 520,
+    "globalLedgerSum": "0",
+    "unbalancedEntries": 0,
+    "ledgerDiscrepancies": 0,
+    "unexpectedNegativeBalances": 0,
+    "duplicatePayoutIdempotencyKeys": 0,
+    "payoutsWithMultipleEvidence": 0,
+    "transfersEqualPaidPayouts": true,
+    "callsEqualTransfers": true,
+    "reconciliationOk": true,
+    "reconciliationMismatches": 0,
+    "reconciliationMs": 11.5
+  },
+  "invariantsPassed": true
+}
