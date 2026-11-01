@@ -7,7 +7,7 @@ import { PgDb } from "../../src/db/pg";
 import * as L from "../../src/ledger/ledger";
 import * as P from "../../src/payouts/service";
 import { SimulatedProvider } from "../../src/payouts/provider";
-import { freshDb, TEST_URL } from "../pg/helper";
+import { approvePolicies, freshDb, loginDb, TEST_URL } from "../pg/helper";
 
 /**
  * Backup/restore drill against real PostgreSQL: pg_dump (custom format, single snapshot) -> pg_restore into a clean database.
@@ -36,12 +36,9 @@ const restore = async (file: string) => {
 const expireLeases = (db: PgDb) => db.query("UPDATE payouts SET lease_until = now() - interval '1 second' WHERE status='processing'");
 
 beforeAll(async () => {
-  src = await freshDb(); app = new PgDb(TEST_URL, 10, "xtc_app"); admin = new PgDb(TEST_URL, 3, "xtc_admin"); sim = new SimulatedProvider();
+  src = await freshDb(); app = loginDb("t_worker", 10); admin = loginDb("t_admin", 3); sim = new SimulatedProvider();
   dir = mkdtempSync(join(tmpdir(), "xtc-dr-"));
-  for (const [k, v] of Object.entries({ hold_days: "0", coin_value_usd_micros: "10000", min_payout_coins: "10", review_threshold_coins: "100000", clawback_mode: "debt" })) {
-    const id = (await admin.query("SELECT propose_policy($1,$2,'alice') id", [k, v])).rows[0].id;
-    await admin.query("SELECT approve_policy_proposal($1,'bob')", [id]);
-  }
+  await approvePolicies({ hold_days: "0", coin_value_usd_micros: "10000", min_payout_coins: "10", review_threshold_coins: "100000", clawback_mode: "debt" });
   for (const u of ["c1", "c2", "c3"]) await src.query(`INSERT INTO payout_profiles(user_id,provider_account_id,verification_status,payouts_enabled) VALUES($1,$2,'verified',true)`, [u, `acct_${u}`]);
   for (const [i, c] of ["c1", "c2", "c3"].entries()) {
     await L.creditPurchase(app, { userId: `fan${i}`, coins: 5000n, provider: "stripe", providerTxId: `tx${i}` });
@@ -72,14 +69,17 @@ describe("backup / restore drill", () => {
     const inv = await L.checkInvariants(dst); expect(inv.globalSum).toBe(0n); expect(inv.discrepancies).toEqual([]);
     expect((await dst.query("SELECT status, count(*)::int n FROM payouts GROUP BY 1 ORDER BY 1")).rows).toEqual([{ status: "paid", n: 1 }, { status: "processing", n: 1 }, { status: "queued", n: 1 }]);
     expect((await dst.query("SELECT key, value, version FROM accounting_policy WHERE value IS NOT NULL ORDER BY key")).rows.length).toBe(5);
-    expect((await dst.query("SELECT count(*)::int n FROM accounting_policy_history WHERE proposed_by='alice' AND actor='bob'")).rows[0].n).toBe(5);
+    expect((await dst.query("SELECT count(*)::int n FROM accounting_policy_history WHERE proposed_by='policy_alice' AND actor='policy_bob'")).rows[0].n).toBe(5);
 
     // Guards survived the restore.
     await expect(dst.query("UPDATE journal_entries SET created_at=now()")).rejects.toThrow(/append-only/);
-    await expect(dst.query("TRUNCATE postings CASCADE")).rejects.toThrow(/blocked/);
+    const dba = loginDb("dba_np", 2, url(RESTORE_DB)), plain = loginDb("t_app", 2, url(RESTORE_DB));
+    await expect(dba.query("TRUNCATE postings CASCADE")).rejects.toThrow(/blocked|permission denied|must be owner/);
+    await expect(plain.query("TRUNCATE postings CASCADE")).rejects.toThrow(/permission denied/);
+    await dba.close(); await plain.close();
     await expect(dst.query("UPDATE payouts SET status='paid' WHERE id=$1", [id2])).rejects.toThrow(/provider evidence/);
-    const dstApp = new PgDb(url(RESTORE_DB), 5, "xtc_app");
-    await expect(dstApp.query("UPDATE ledger_accounts SET balance=999999")).rejects.toThrow(/permission denied/);
+    const dstApp = loginDb("t_worker", 5, url(RESTORE_DB));
+    await expect(loginDb("t_app", 1, url(RESTORE_DB)).query("UPDATE ledger_accounts SET balance=999999")).rejects.toThrow(/permission denied/);
 
     // Idempotency records survived: replays are no-ops.
     expect((await L.creditPurchase(dstApp, { userId: "fan0", coins: 5000n, provider: "stripe", providerTxId: "tx0" })).replayed).toBe(true);
@@ -105,7 +105,7 @@ describe("backup / restore drill", () => {
     const transfersAtProvider = sim.transfers.size, calls = sim.calls;
     await dst.close(); await restore(file);
     expect((await dst.query("SELECT status FROM payouts WHERE id=$1", [r.payout.id])).rows[0].status).toBe("queued"); // restored DB is behind the provider
-    const dstApp = new PgDb(url(RESTORE_DB), 5, "xtc_app");
+    const dstApp = loginDb("t_worker", 5, url(RESTORE_DB));
     const out = await P.processDuePayouts(dstApp, sim, 10);
     expect(out.paid).toBeGreaterThanOrEqual(1);
     expect(sim.transfers.size).toBe(transfersAtProvider); expect(sim.calls).toBe(calls); // adopted, never re-created
@@ -136,7 +136,7 @@ describe("backup / restore drill", () => {
     await dst.close(); await restore(file);
     const inv = await L.checkInvariants(dst);
     expect(inv.globalSum).toBe(0n); expect(inv.discrepancies).toEqual([]);
-    const dstApp = new PgDb(url(RESTORE_DB), 5, "xtc_app");
+    const dstApp = loginDb("t_worker", 5, url(RESTORE_DB));
     // Providers outside the snapshot may be ahead of it: recovery must adopt, never duplicate.
     const calls = sim.calls, transfers = sim.transfers.size;
     for (let i = 0; i < 5; i++) { await expireLeases(dst); await P.processDuePayouts(dstApp, sim, 50); }

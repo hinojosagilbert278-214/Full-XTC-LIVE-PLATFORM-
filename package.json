@@ -11,6 +11,7 @@
     "pg:stop": "scripts/pg-test.sh stop",
     "redis:start": "scripts/redis-test.sh start",
     "migrate": "tsx src/migrate.ts",
+    "policy": "tsx src/policy-cli.ts",
     "load": "tsx scripts/load-test.ts",
     "start": "tsx src/main.ts"
   },

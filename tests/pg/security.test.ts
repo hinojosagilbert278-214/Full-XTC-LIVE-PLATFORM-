@@ -78,7 +78,7 @@ describe("production guards", () => {
     await expect(assertLeastPrivilege(fe)).resolves.toBeUndefined();
   });
   it("production config refuses simulation payouts, missing Redis, and simulation webhooks", () => {
-    const env = { NODE_ENV: "production", DATABASE_URL: "x", JWT_SECRET: "s".repeat(40), PAYOUT_PROVIDER: "stripe", STRIPE_SECRET_KEY: "k", REDIS_URL: "redis://x" };
+    const env = { NODE_ENV: "production", DATABASE_URL: "x", WORKER_DATABASE_URL: "x", JWT_SECRET: "s".repeat(40), PAYOUT_PROVIDER: "stripe", STRIPE_SECRET_KEY: "k", REDIS_URL: "redis://x" };
     expect(() => loadConfig(env)).not.toThrow();
     expect(() => loadConfig({ ...env, PAYOUT_PROVIDER: "simulation" })).toThrow(/simulation/);
     expect(() => loadConfig({ ...env, REDIS_URL: undefined })).toThrow(/REDIS_URL/);

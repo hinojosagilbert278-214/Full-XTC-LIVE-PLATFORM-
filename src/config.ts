@@ -14,6 +14,7 @@ const schema = z.object({
   GOOGLE_PUBSUB_AUDIENCE: z.string().optional(),
   GOOGLE_PUBSUB_SERVICE_ACCOUNT: z.string().optional(),
   ADMIN_DATABASE_URL: z.string().optional(),      // login that is a member of xtc_admin (policy approval, holds, freezes)
+  WORKER_DATABASE_URL: z.string().optional(),     // login that is a direct member of xtc_provider_worker (records provider evidence)
   MIGRATION_DATABASE_URL: z.string().optional(),  // owner credentials, used only by `npm run migrate`
   REDIS_URL: z.string().optional(),
   ALLOW_LOCAL_RATE_LIMIT: z.enum(["true", "false"]).default("false"),
@@ -32,6 +33,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     throw new Error("WEBHOOK_SIMULATION must not be enabled in production");
   if (c.NODE_ENV === "production" && c.PAYOUT_PROVIDER === "simulation")
     throw new Error("PAYOUT_PROVIDER=simulation is not allowed in production");
+  if (c.NODE_ENV === "production" && !c.WORKER_DATABASE_URL) throw new Error("WORKER_DATABASE_URL is required in production (provider evidence must be recorded by a dedicated worker login)");
   if (c.PAYOUT_PROVIDER === "stripe" && !c.STRIPE_SECRET_KEY) throw new Error("STRIPE_SECRET_KEY is required when PAYOUT_PROVIDER=stripe");
   if (c.NODE_ENV === "production" && !c.REDIS_URL && c.ALLOW_LOCAL_RATE_LIMIT !== "true")
     throw new Error("REDIS_URL is required in production (per-instance rate limits are not enforceable across instances)");

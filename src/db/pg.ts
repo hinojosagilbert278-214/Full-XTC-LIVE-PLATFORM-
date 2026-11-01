@@ -61,7 +61,7 @@ export async function migrate(db: PgDb, dir = new URL("../../migrations/", impor
   const files = readdirSync(dir).filter((x) => x.endsWith(".sql")).sort();
   await db.transaction(async (tx) => {
     await tx.query("SELECT pg_advisory_xact_lock(724001)");
-    await tx.query("SELECT set_config('xtc.migrating','on',true)"); // permits schema changes past the DDL guard for this transaction only
+    await tx.query("SELECT set_config('xtc.migrating','on',true)"); // legacy: only lets pre-008 migrations replay; the 008 guards ignore it and check xtc_migrator membership instead
     for (const f of files) await tx.query(readFileSync(new URL(f, dir), "utf8"));
     const t = await tx.query("SELECT to_regclass('public.ddl_audit') AS t");
     if (t.rows[0].t) await tx.query("INSERT INTO ddl_audit(actor, note) VALUES (session_user, $1)", [`migrate ${files.join(",")}`]);

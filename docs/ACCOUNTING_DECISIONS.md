@@ -3,7 +3,10 @@
 **Status: PROPOSED. Nothing below is approved.** No existing ledger calculation has been changed.
 Approval is recorded *in the system*: policy values live in `accounting_policy` (migration 005), seeded as
 **unapproved**, and the payout engine and clawback logic refuse to run until an administrator approves each
-required key through the admin-only approval function (audited, append-only history).
+required key through the two-person approval functions (migration 008): the proposer and the approver must be two
+different authenticated `xtc_policy_admin` database logins (see `docs/ADMIN_IDENTITY.md`); both identities, timestamps, version and value
+are kept in append-only history. Each key accepts only the values listed in migration 008's `policy_value_ok`
+(ranges for numeric keys; fixed enumerations for the rest), and those enumerations are themselves proposals pending business approval.
 Recommended values below are proposals for finance/legal to accept or replace.
 
 Sign convention: `earnings:*` balances are liabilities to creators (positive). `debt:*` accounts are platform

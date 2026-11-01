@@ -3,23 +3,21 @@ import { PgDb } from "../../src/db/pg";
 import * as L from "../../src/ledger/ledger";
 import * as P from "../../src/payouts/service";
 import { SimulatedProvider } from "../../src/payouts/provider";
-import { freshDb, TEST_URL } from "./helper";
+import { freshDb, loginDb, approvePolicies, resetPolicies } from "./helper";
 
 let owner: PgDb, app: PgDb, admin: PgDb, sim: SimulatedProvider;
 const POLICY: Record<string, string> = { hold_days: "0", coin_value_usd_micros: "10000", min_payout_coins: "10", review_threshold_coins: "1000", clawback_mode: "debt" };
-const wipe = (db: PgDb) => db.query(`BEGIN; SELECT set_config('xtc.allow_destructive','on',true);
-  TRUNCATE postings, journal_entries, ledger_accounts, audit_log, payouts, payout_events, payout_holds, payout_profiles, refund_requests, policy_proposals RESTART IDENTITY CASCADE; COMMIT`);
-async function approveAll() {
-  for (const [k, v] of Object.entries(POLICY)) {
-    const id = (await admin.query("SELECT propose_policy($1,$2,'alice') id", [k, v])).rows[0].id;
-    await admin.query("SELECT approve_policy_proposal($1,'bob')", [id]);
-  }
+const wipe = (db: PgDb) => db.query(`BEGIN; TRUNCATE postings, journal_entries, ledger_accounts, audit_log, payouts, payout_events, payout_holds, payout_profiles, refund_requests, policy_proposals, webhook_events RESTART IDENTITY CASCADE; COMMIT`);
+const approveAll = () => approvePolicies(POLICY);
+/** Records a chargeback event row the way webhook ingestion does (signature verification happens before persistence). */
+async function chargebackEvent(txId: string, provider = "stripe") {
+  return Number((await owner.query(`INSERT INTO webhook_events(provider,event_id,kind,ledger_provider,provider_tx_id,raw_body) VALUES($1,$2,'chargeback',$1,$3,'{}') RETURNING id`, [provider, `evt-${txId}-${Math.random()}`, txId])).rows[0].id);
 }
-beforeAll(async () => { owner = await freshDb(); app = new PgDb(TEST_URL, 10, "xtc_app"); admin = new PgDb(TEST_URL, 3, "xtc_admin"); });
+beforeAll(async () => { owner = await freshDb(); app = loginDb("t_worker", 10); admin = loginDb("t_admin", 3); });
 afterAll(async () => { await owner.close(); await app.close(); await admin.close(); });
 beforeEach(async () => {
   await wipe(owner);
-  await owner.query("BEGIN; SELECT set_config('xtc.policy_fn','on',true); UPDATE accounting_policy SET value=NULL, approved_by=NULL, approved_at=NULL, proposed_by=NULL, version=0; COMMIT");
+  await resetPolicies(owner);
   sim = new SimulatedProvider();
 });
 async function earn(creator: string, gross: bigint, tag: string, fam?: { id: string; bps: number }) {
@@ -28,38 +26,6 @@ async function earn(creator: string, gross: bigint, tag: string, fam?: { id: str
 }
 const verify = (u: string) => owner.query(`INSERT INTO payout_profiles(user_id,provider_account_id,verification_status,payouts_enabled) VALUES($1,$2,'verified',true) ON CONFLICT (user_id) DO NOTHING`, [u, `acct_${u}`]);
 const sumAll = async () => (await owner.query("SELECT COALESCE(SUM(amount),0)::text s FROM postings")).rows[0].s;
-
-describe("R1 four-eyes policy approval", () => {
-  it("proposer cannot approve; a second admin can; both actors, timestamps, version and value are recorded", async () => {
-    const id = (await admin.query("SELECT propose_policy('hold_days','7','alice') id")).rows[0].id;
-    await expect(admin.query("SELECT approve_policy_proposal($1,'alice')", [id])).rejects.toThrow(/four-eyes/);
-    expect((await owner.query("SELECT value FROM accounting_policy WHERE key='hold_days'")).rows[0].value).toBeNull();
-    await admin.query("SELECT approve_policy_proposal($1,'bob')", [id]);
-    const h = (await owner.query("SELECT * FROM accounting_policy_history WHERE key='hold_days'")).rows[0];
-    expect(h).toMatchObject({ new_value: "7", actor: "bob", proposed_by: "alice", version: 1 });
-    expect(h.proposed_at).toBeTruthy(); expect(h.at ?? h.approved_at ?? h.created_at).toBeTruthy();
-    const pr = (await owner.query("SELECT * FROM policy_proposals WHERE id=$1", [id])).rows[0];
-    expect(pr).toMatchObject({ status: "approved", proposed_by: "alice", decided_by: "bob" });
-    await expect(admin.query("SELECT approve_policy_proposal($1,'carol')", [id])).rejects.toThrow(/not pending/);
-  });
-  it("the table itself refuses a self-approval even if the function is bypassed", async () => {
-    const id = (await admin.query("SELECT propose_policy('hold_days','7','alice') id")).rows[0].id;
-    await expect(owner.query("UPDATE policy_proposals SET status='approved', decided_by='alice', decided_at=now() WHERE id=$1", [id])).rejects.toThrow(/check constraint/);
-  });
-  it("policy values cannot be changed outside the approval function, and invalid values are rejected", async () => {
-    await expect(owner.query("UPDATE accounting_policy SET value='1' WHERE key='hold_days'")).rejects.toThrow(/approve_policy_proposal/);
-    await expect(admin.query("SELECT propose_policy('hold_days','-3','alice')")).rejects.toThrow(/invalid value/);
-    await expect(admin.query("SELECT propose_policy('coin_value_usd_micros','0','alice')")).rejects.toThrow(/invalid value/);
-    await expect(app.query("SELECT propose_policy('hold_days','1','mallory')")).rejects.toThrow(/permission denied/);
-    await expect(app.query("SELECT approve_policy_proposal(1,'mallory')")).rejects.toThrow(/permission denied/);
-    await expect(app.query("SELECT approve_policy('hold_days','1','x')")).rejects.toThrow(/does not exist/);
-  });
-  it("a new proposal supersedes the pending one", async () => {
-    const a = (await admin.query("SELECT propose_policy('hold_days','3','alice') id")).rows[0].id;
-    await admin.query("SELECT propose_policy('hold_days','4','alice')");
-    expect((await owner.query("SELECT status FROM policy_proposals WHERE id=$1", [a])).rows[0].status).toBe("superseded");
-  });
-});
 
 describe("R2 provider evidence required for 'paid'", () => {
   beforeEach(async () => { await approveAll(); await verify("c1"); });
@@ -76,17 +42,18 @@ describe("R2 provider evidence required for 'paid'", () => {
     const id = await inReview();
     await expect(owner.query("UPDATE payouts SET status='paid', provider_ref='tr_fake' WHERE id=$1", [id])).rejects.toThrow(/without matching provider evidence/);
   });
-  it("evidence must match provider, ref and amount, and an admin-asserted create_response is not enough from needs_review", async () => {
+  it("evidence must match the payout, and a paid transition must use the evidence's reference", async () => {
     const id = await inReview();
-    await owner.query("INSERT INTO payout_provider_evidence(payout_id,provider,provider_ref,amount_minor,currency,source) VALUES($1,'simulated','tr_1',1,'usd','provider_lookup')", [id]);
-    await expect(owner.query("UPDATE payouts SET status='paid', provider_ref='tr_1' WHERE id=$1", [id])).rejects.toThrow(/provider evidence/); // wrong amount
+    const p = (await owner.query("SELECT provider, amount_minor, currency FROM payouts WHERE id=$1", [id])).rows[0];
+    await app.query("SELECT record_provider_evidence($1,$2,'tr_1',$3,$4,'provider_lookup',$5::jsonb)", [id, p.provider, p.amount_minor, p.currency, JSON.stringify({ transfer_group: `payout-${id}` })]);
+    await expect(owner.query("UPDATE payouts SET status='paid', provider_ref='tr_other' WHERE id=$1", [id])).rejects.toThrow(/provider evidence/);
     await expect(owner.query("UPDATE payout_provider_evidence SET amount_minor=1000 WHERE payout_id=$1", [id])).rejects.toThrow(/append-only/);
   });
   it("create_response evidence cannot rescue a needs_review payout", async () => {
     const id = await inReview();
     const p = (await owner.query("SELECT provider, amount_minor, currency FROM payouts WHERE id=$1", [id])).rows[0];
-    await owner.query("INSERT INTO payout_provider_evidence(payout_id,provider,provider_ref,amount_minor,currency,source) VALUES($1,$2,'tr_2',$3,$4,'create_response')", [id, p.provider, p.amount_minor, p.currency]);
-    await expect(owner.query("UPDATE payouts SET status='paid', provider_ref='tr_2' WHERE id=$1", [id])).rejects.toThrow(/lookup\/webhook evidence/);
+    await app.query("SELECT record_provider_evidence($1,$2,'tr_2',$3,$4,'create_response',$5::jsonb)", [id, p.provider, p.amount_minor, p.currency, JSON.stringify({ idempotency_key: `payout-${id}` })]);
+    await expect(owner.query("UPDATE payouts SET status='paid', provider_ref='tr_2' WHERE id=$1", [id])).rejects.toThrow(/lookup evidence/);
   });
   it("the service path (lookup evidence + settle entry) succeeds from needs_review", async () => {
     const id = await inReview();
@@ -133,8 +100,8 @@ describe("R3 payout <-> ledger linkage", () => {
   it("ledger movements on payout accounts without a payout record are refused", async () => {
     await earn("c1", 1000n, "a");
     await L.ensureAccount(app, "payout:clearing", "payout_clearing");
-    await expect(L.postEntry(app, { key: "orphan", type: "payout_reserve", postings: [{ account: L.earningsId("c1"), amount: -50n }, { account: "payout:clearing", amount: 50n }] })).rejects.toThrow(/without a payout record/);
-    await expect(L.postEntry(app, { key: "orphan2", type: "gift", postings: [{ account: L.earningsId("c1"), amount: -50n }, { account: "payout:clearing", amount: 50n }] })).rejects.toThrow(/without a payout record/);
+    await expect(L.postEntry(app, { key: "orphan", type: "payout_reserve", postings: [{ account: L.earningsId("c1"), amount: -50n }, { account: "payout:clearing", amount: 50n }] })).rejects.toThrow(/without a matching payout record/);
+    await expect(L.postEntry(app, { key: "orphan2", type: "gift", postings: [{ account: L.earningsId("c1"), amount: -50n }, { account: "payout:clearing", amount: 50n }] })).rejects.toThrow(/without a matching payout record/);
     expect(await sumAll()).toBe("0");
   });
 });
@@ -166,7 +133,7 @@ describe("R4 refund and chargeback holds cover creator and family earnings", () 
   });
   it("a chargeback of spent coins holds the newest gifts' shares for creator and family, idempotently", async () => {
     await L.creditPurchase(app, { userId: "fan", coins: 1000n, provider: "stripe", providerTxId: "tx1" });
-    const pe = Number((await owner.query("SELECT id FROM journal_entries WHERE idempotency_key='purchase:stripe:tx1'")).rows[0].id);
+    const pe = await chargebackEvent("tx1");
     await L.sendGift(app, { giftId: "gA", fromUser: "fan", creatorId: "c1", coins: 600n, familyId: "f1", familyBps: 1000 });
     await L.sendGift(app, { giftId: "gB", fromUser: "fan", creatorId: "c2", coins: 400n });
     expect((await owner.query("SELECT place_chargeback_holds($1) n", [pe])).rows[0].n).toBeGreaterThan(0);
@@ -177,7 +144,7 @@ describe("R4 refund and chargeback holds cover creator and family earnings", () 
   });
   it("a chargeback whose coins are still in the wallet creates no holds", async () => {
     await L.creditPurchase(app, { userId: "fan", coins: 1000n, provider: "stripe", providerTxId: "tx2" });
-    const pe = Number((await owner.query("SELECT id FROM journal_entries WHERE idempotency_key='purchase:stripe:tx2'")).rows[0].id);
+    const pe = await chargebackEvent("tx2");
     expect((await owner.query("SELECT place_chargeback_holds($1) n", [pe])).rows[0].n).toBe(0);
   });
   it("family debt is recorded by the clawback and repaid by an explicit offset entry", async () => {
@@ -195,29 +162,17 @@ describe("R4 refund and chargeback holds cover creator and family earnings", () 
   });
 });
 
-describe("R5 schema and destructive-operation guards", () => {
-  it("TRUNCATE of ledger tables is blocked unless the explicit tooling flag is set", async () => {
-    await expect(owner.query("TRUNCATE postings CASCADE")).rejects.toThrow(/TRUNCATE .* is blocked/);
-    await expect(owner.query("TRUNCATE ddl_audit")).rejects.toThrow(/blocked/);
-  });
-  it("trigger, function and table changes are blocked outside migrations", async () => {
-    await expect(owner.query("ALTER TABLE journal_entries DISABLE TRIGGER USER")).rejects.toThrow(/blocked outside migrations/);
-    await expect(owner.query("DROP TRIGGER payouts_guard_trg ON payouts").catch((e) => { throw e; })).rejects.toThrow(/blocked outside migrations|does not exist/);
-    await expect(owner.query("CREATE OR REPLACE FUNCTION payouts_guard() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql")).rejects.toThrow(/blocked outside migrations/);
-    await expect(owner.query("ALTER TABLE payouts DROP COLUMN reserve_entry")).rejects.toThrow(/blocked outside migrations/);
-  });
-  it("application and admin roles hold no TRIGGER/TRUNCATE privileges on financial tables", async () => {
-    const r = await owner.query(`SELECT grantee, table_name, privilege_type FROM information_schema.role_table_grants
-      WHERE grantee IN ('xtc_app','xtc_admin','xtc_readonly','xtc_authenticated') AND privilege_type IN ('TRIGGER','TRUNCATE','REFERENCES')`);
-    expect(r.rows).toEqual([]);
-    await expect(app.query("DROP TABLE postings")).rejects.toThrow(/must be owner|blocked outside migrations/);
-    await expect(app.query("TRUNCATE postings")).rejects.toThrow(/permission denied/);
-  });
+describe("R5 migrations", () => {
   it("migrations are re-appliable and every run is recorded in ddl_audit", async () => {
     const { migrate } = await import("../../src/db/pg");
     const before = (await owner.query("SELECT count(*)::int n FROM ddl_audit")).rows[0].n;
     await migrate(owner);
     expect((await owner.query("SELECT count(*)::int n FROM ddl_audit")).rows[0].n).toBe(before + 1);
     await expect(owner.query("UPDATE ddl_audit SET actor='x'")).rejects.toThrow(/append-only/);
+  });
+  it("application and admin roles hold no TRIGGER/TRUNCATE privileges on financial tables", async () => {
+    const r = await owner.query(`SELECT grantee, table_name, privilege_type FROM information_schema.role_table_grants
+      WHERE grantee IN ('xtc_app','xtc_admin','xtc_readonly','xtc_authenticated') AND privilege_type IN ('TRIGGER','TRUNCATE','REFERENCES')`);
+    expect(r.rows).toEqual([]);
   });
 });

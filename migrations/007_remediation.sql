@@ -249,6 +249,8 @@ END $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 -- Chargeback: hold the creator/family shares of the charged-back user's recent gifts, newest first, up to the coins
 -- that can no longer be recovered from the wallet. Protective, so it works before accounting policy approval.
+-- Replayed after 008: the signature changed there, so drop before recreating (008 drops it again).
+DROP FUNCTION IF EXISTS place_chargeback_holds(bigint, int);
 CREATE OR REPLACE FUNCTION place_chargeback_holds(p_purchase_entry bigint, p_lookback_days int DEFAULT 90) RETURNS int AS $$
 DECLARE v_user text; v_coins bigint; v_wallet bigint; v_unrec bigint; g record; r record; take bigint; amt bigint; n int := 0;
 BEGIN

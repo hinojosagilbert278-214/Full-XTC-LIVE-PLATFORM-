@@ -50,6 +50,4 @@ All routes require a bearer token. Financial mutations require `Idempotency-Key`
 | POST `/v1/admin/accounts/:user/freeze` `{frozen}` | admin | freeze/unfreeze wallet spending |
 | GET `/v1/admin/payouts/reconciliation` | admin | ledger + provider reconciliation |
 | GET `/v1/admin/policy` | admin | view approved policy values |
-| POST `/v1/admin/policy/:key/proposals` `{value}` | admin | propose a policy value (201; 404 unknown key; 400 invalid value) |
-| POST `/v1/admin/policy/proposals/:id/approve` | admin | **four-eyes**: a *different* admin approves (403 `four_eyes_required` if proposer; 409 not pending) |
-| POST `/v1/admin/policy/proposals/:id/reject`, GET `/v1/admin/policy/proposals` | admin | reject (not by proposer) / list |
+| *(removed in 008)* policy propose / approve / reject | – | Policy writes are **not** available over HTTP: the app connection must never be able to act as an administrator. Use `npm run policy -- propose|approve|reject` with a personal `xtc_policy_admin` login (`docs/ADMIN_IDENTITY.md`). These routes now return 404. |

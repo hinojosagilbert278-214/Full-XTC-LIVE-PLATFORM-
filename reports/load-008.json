@@ -1,0 +1,99 @@
+{
+  "config": {
+    "seconds": 20,
+    "workers": 32,
+    "creators": 20,
+    "node": "v26.12.1",
+    "note": "synthetic mix on one local machine; NOT a capacity claim"
+  },
+  "throughput": {
+    "elapsedSeconds": 20.1,
+    "successfulOps": 10943,
+    "opsPerSecond": 544.2,
+    "perOp": {
+      "process": 2184,
+      "gift": 4372,
+      "chargeback_purchase": 1098,
+      "chargeback_holds": 1098,
+      "payout_request": 2189,
+      "refund_clawback": 2
+    }
+  },
+  "latencyMs": {
+    "process": {
+      "n": 2184,
+      "p50": 25.88,
+      "p95": 158.52,
+      "p99": 244.79,
+      "max": 360.17
+    },
+    "gift": {
+      "n": 4372,
+      "p50": 33.86,
+      "p95": 118.52,
+      "p99": 175.4,
+      "max": 276.1
+    },
+    "chargeback_purchase": {
+      "n": 1098,
+      "p50": 13.15,
+      "p95": 38.12,
+      "p99": 73.11,
+      "max": 171.38
+    },
+    "chargeback_holds": {
+      "n": 1098,
+      "p50": 15.98,
+      "p95": 183.93,
+      "p99": 234.17,
+      "max": 253.56
+    },
+    "payout_request": {
+      "n": 2189,
+      "p50": 111.47,
+      "p95": 318.01,
+      "p99": 469.15,
+      "max": 702.99
+    },
+    "refund_clawback": {
+      "n": 2,
+      "p50": 120.79,
+      "p95": 120.79,
+      "p99": 120.79,
+      "max": 120.79
+    }
+  },
+  "contention": {
+    "pgDeadlocksDuringRun": 0,
+    "appDeadlockRetries": 0,
+    "serializationRetries": 0,
+    "totalTxRetries": 0,
+    "retryRatePerTx": 0,
+    "lockWaitSamples": 4564,
+    "maxConcurrentLockWaiters": 29,
+    "transactionsRolledBack_includingBusinessRejections": 0
+  },
+  "expectedRejections": {},
+  "providerSimulation": {
+    "createCalls": 1797,
+    "transfers": 1797
+  },
+  "endState": {
+    "payoutsByStatus": {
+      "paid": 1797
+    },
+    "paid": 1797,
+    "globalLedgerSum": "0",
+    "unbalancedEntries": 0,
+    "ledgerDiscrepancies": 0,
+    "unexpectedNegativeBalances": 0,
+    "duplicatePayoutIdempotencyKeys": 0,
+    "payoutsWithMultipleEvidence": 0,
+    "transfersEqualPaidPayouts": true,
+    "callsEqualTransfers": true,
+    "reconciliationOk": true,
+    "reconciliationMismatches": 0,
+    "reconciliationMs": 30.9
+  },
+  "invariantsPassed": true
+}

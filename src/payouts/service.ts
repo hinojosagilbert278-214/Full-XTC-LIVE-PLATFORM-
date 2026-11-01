@@ -153,8 +153,9 @@ export async function markPaid(db: PgDb, id: string | number, ref: string, actor
     const cur = await tx.query<PayoutRow>(`SELECT * FROM payouts WHERE id=$1 AND status IN ('processing','needs_review')`, [id]);
     if (!cur.rows[0]) return null;
     const c = cur.rows[0];
-    await tx.query(`INSERT INTO payout_provider_evidence(payout_id,provider,provider_ref,amount_minor,currency,source) VALUES($1,$2,$3,$4,$5,$6)
-                    ON CONFLICT (payout_id) DO NOTHING`, [id, c.provider, ref, c.amount_minor, c.currency, source]);
+    // Evidence goes through the database function that only a provider-worker login may execute (migration 008).
+    const verification = source === "provider_lookup" ? { transfer_group: `payout-${id}`, via: "findTransfer" } : { idempotency_key: `payout-${id}`, via: "createTransfer" };
+    await tx.query(`SELECT record_provider_evidence($1,$2,$3,$4,$5,$6,$7::jsonb)`, [id, c.provider, ref, c.amount_minor, c.currency, source, JSON.stringify(verification)]);
     const p = await transition(tx, id, ["processing", "needs_review"], "paid", actor, { provider_ref: ref, lease_until: null });
     if (!p) return null; // already settled by another worker: idempotent no-op
     await settle(tx, p);

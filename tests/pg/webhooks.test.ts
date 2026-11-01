@@ -163,7 +163,7 @@ describe("Apple StoreKit 2 notifications (JWS x5c)", () => {
     expect((await s.db.query(`SELECT 1 FROM webhook_events`)).rows).toHaveLength(0);
   });
   it("ignores Sandbox transactions in production mode", async () => {
-    const prod = await startApp({ NODE_ENV: "production", PAYOUT_PROVIDER: "stripe", STRIPE_SECRET_KEY: "k", REDIS_URL: "redis://x", JWT_SECRET: SECRET, APPLE_ROOT_CA_PEM: apple.rootPem }, [webhookRoutes()]);
+    const prod = await startApp({ NODE_ENV: "production", WORKER_DATABASE_URL: "x", PAYOUT_PROVIDER: "stripe", STRIPE_SECRET_KEY: "k", REDIS_URL: "redis://x", JWT_SECRET: SECRET, APPLE_ROOT_CA_PEM: apple.rootPem }, [webhookRoutes()]);
     await call(prod.url, "POST", "/webhooks/apple", { raw: appleBody({ uuid: "n-5", type: "ONE_TIME_CHARGE", txId: "3003", env: "Sandbox" }) });
     expect((await prod.db.query(`SELECT status FROM webhook_events`)).rows[0].status).toBe("ignored");
     await prod.close();

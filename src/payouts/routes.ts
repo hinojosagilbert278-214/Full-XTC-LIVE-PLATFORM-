@@ -9,8 +9,8 @@ import * as P from "./service";
 const ID = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 const NUM = z.string().regex(/^[0-9]{1,18}$/);
 
-/** adminDb is a separate pool connecting as xtc_admin; it is the only path to policy approval. */
-export function payoutRoutes(provider: PayoutProvider, adminDb?: PgDb) {
+/** adminDb connects as xtc_admin (holds, freezes). workerDb connects as a provider-worker login and is the only pool allowed to record provider evidence. */
+export function payoutRoutes(provider: PayoutProvider, adminDb?: PgDb, workerDb?: PgDb) {
   return (app: App) => {
     const db = app.db;
     const me = (c: { principal: { sub: string } | null }) => c.principal!.sub;
@@ -67,7 +67,7 @@ export function payoutRoutes(provider: PayoutProvider, adminDb?: PgDb) {
     });
     app.route("POST", "/v1/admin/payouts/:id/resolve", "admin", async (c) => {
       const b = c.json(z.object({ action: z.enum(["retry", "fail", "mark_paid"]) }).strict());
-      const p = await map(() => P.resolvePayout(db, provider, NUM.parse(c.params.id), b.action, me(c)));
+      const p = await map(() => P.resolvePayout(workerDb ?? db, provider, NUM.parse(c.params.id), b.action, me(c)));
       await adminAudit(c, `payout.resolve.${b.action}`, `payout:${p.id}`);
       return { body: view(p) };
     });
@@ -110,33 +110,8 @@ export function payoutRoutes(provider: PayoutProvider, adminDb?: PgDb) {
     });
     app.route("GET", "/v1/admin/payouts/reconciliation", "admin", async () => ({ body: await P.reconcilePayouts(db, provider) }));
     app.route("GET", "/v1/admin/policy", "admin", async () => ({ body: await P.getPolicy(db) }));
-    // Four-eyes: one admin proposes, a different admin approves. Enforced in SQL (function and table CHECK).
-    app.route("POST", "/v1/admin/policy/:key/proposals", "admin", async (c) => {
-      if (!adminDb) throw new HttpError(503, "admin_db_not_configured");
-      const b = c.json(z.object({ value: z.string().min(1).max(64) }).strict());
-      const key = z.string().regex(/^[a-z_]{1,64}$/).parse(c.params.key);
-      const r = await adminDb.query<{ id: string }>(`SELECT propose_policy($1,$2,$3) AS id`, [key, b.value, me(c)])
-        .catch((e) => { throw new HttpError(/unknown policy/.test(String(e.message)) ? 404 : 400, /unknown policy/.test(String(e.message)) ? "unknown_policy_key" : "invalid_policy_value"); });
-      await adminAudit(c, "policy.propose", `policy:${key}`, { value: b.value, proposalId: r.rows[0].id });
-      return { status: 201, body: { proposalId: Number(r.rows[0].id), key, value: b.value, status: "pending" } };
-    });
-    app.route("POST", "/v1/admin/policy/proposals/:id/approve", "admin", async (c) => {
-      if (!adminDb) throw new HttpError(503, "admin_db_not_configured");
-      const id = z.coerce.number().int().positive().parse(c.params.id);
-      await adminDb.query(`SELECT approve_policy_proposal($1,$2)`, [id, me(c)]).catch((e) => {
-        if (/four-eyes/.test(String(e.message))) throw new HttpError(403, "four_eyes_required");
-        throw new HttpError(409, "proposal_not_pending");
-      });
-      await adminAudit(c, "policy.approve", `proposal:${id}`);
-      return { body: { proposalId: id, status: "approved" } };
-    });
-    app.route("POST", "/v1/admin/policy/proposals/:id/reject", "admin", async (c) => {
-      if (!adminDb) throw new HttpError(503, "admin_db_not_configured");
-      const id = z.coerce.number().int().positive().parse(c.params.id);
-      await adminDb.query(`SELECT reject_policy_proposal($1,$2)`, [id, me(c)]).catch(() => { throw new HttpError(409, "proposal_not_pending"); });
-      await adminAudit(c, "policy.reject", `proposal:${id}`);
-      return { body: { proposalId: id, status: "rejected" } };
-    });
+    // Policy proposals/approvals are deliberately NOT exposed over HTTP: each administrator uses their own database login
+    // (`npm run policy`), so the database can authenticate two distinct people. See docs/OPERATIONS.md.
     app.route("GET", "/v1/admin/policy/proposals", "admin", async () => ({ body: (await db.query(`SELECT id,key,value,proposed_by,proposed_at,status,decided_by,decided_at FROM policy_proposals ORDER BY id DESC LIMIT 100`)).rows }));
   };
 }

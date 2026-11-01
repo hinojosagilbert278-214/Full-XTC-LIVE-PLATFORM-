@@ -9,6 +9,7 @@ import { PgDb, migrate } from "../src/db/pg";
 import * as L from "../src/ledger/ledger";
 import * as P from "../src/payouts/service";
 import { SimulatedProvider } from "../src/payouts/provider";
+import { approvePolicies, ensureLogins, loginDb } from "../tests/pg/helper";
 
 const arg = (n: string, d: string) => { const i = process.argv.indexOf(`--${n}`); return i > 0 ? process.argv[i + 1] : d; };
 const SECONDS = Number(arg("seconds", "20")), WORKERS = Number(arg("workers", "8")), CREATORS = Number(arg("creators", "20"));
@@ -26,13 +27,10 @@ const pct = (a: number[], p: number) => { if (!a.length) return null; const s = 
 
 async function main() {
   const owner = new PgDb(URL_, 4);
-  await owner.query("DROP SCHEMA public CASCADE"); await owner.query("CREATE SCHEMA public"); await migrate(owner);
-  const app = new PgDb(URL_, WORKERS * 3, "xtc_app"), admin = new PgDb(URL_, 2, "xtc_admin");
+  await owner.query("DROP SCHEMA public CASCADE"); await owner.query("CREATE SCHEMA public"); await migrate(owner); await ensureLogins(owner);
+  const app = loginDb("t_worker", WORKERS * 3, URL_), admin = loginDb("t_admin", 2, URL_);
   const sim = new SimulatedProvider();
-  for (const [k, v] of Object.entries({ hold_days: "0", coin_value_usd_micros: "10000", min_payout_coins: "10", review_threshold_coins: "1000000", clawback_mode: "debt" })) {
-    const id = (await admin.query("SELECT propose_policy($1,$2,'load-a') id", [k, v])).rows[0].id;
-    await admin.query("SELECT approve_policy_proposal($1,'load-b')", [id]);
-  }
+  await approvePolicies({ hold_days: "0", coin_value_usd_micros: "10000", min_payout_coins: "10", review_threshold_coins: "1000000", clawback_mode: "debt" }, URL_);
   const creators = Array.from({ length: CREATORS }, (_, i) => `lc${i}`);
   for (const c of creators) await owner.query(`INSERT INTO payout_profiles(user_id,provider_account_id,verification_status,payouts_enabled) VALUES($1,$2,'verified',true)`, [c, `acct_${c}`]);
   await L.creditPurchase(app, { userId: "whale", coins: 1_000_000_000n, provider: "stripe", providerTxId: "whale" });
@@ -64,8 +62,10 @@ async function main() {
       else if (roll === 8) { // refund of an earlier seed gift while payouts are in flight
         const e = seed[(i + w) % seed.length]; if (!refunded.has(e)) { refunded.add(e); await timed("refund_clawback", () => P.reverseWithClawback(app, { entryId: e, key: `rf-${e}`, reason: "load refund" })); }
       } else { // chargeback hold placement for a purchase whose coins were spent
-        const pe = Number((await owner.query("SELECT id FROM journal_entries WHERE idempotency_key='purchase:stripe:whale'")).rows[0].id);
-        await timed("chargeback_holds", async () => (await app.query("SELECT place_chargeback_holds($1, 1)", [pe])).rows[0]);
+        const tx = `cb-${w}-${i}`;
+        await timed("chargeback_purchase", () => L.creditPurchase(app, { userId: "whale", coins: 500n, provider: "stripe", providerTxId: tx }));
+        const ev = Number((await owner.query(`INSERT INTO webhook_events(provider,event_id,kind,ledger_provider,provider_tx_id,raw_body) VALUES('stripe',$1,'chargeback','stripe',$2,'{}') RETURNING id`, [`evt-${tx}`, tx])).rows[0].id);
+        await timed("chargeback_holds", async () => (await app.query("SELECT place_chargeback_holds($1, 30)", [ev])).rows[0]);
       }
     }
   };
